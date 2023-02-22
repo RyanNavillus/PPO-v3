@@ -2,9 +2,8 @@ import argparse
 import os
 import random
 import time
-from collections import deque
-from distutils.util import strtobool
 import uuid
+from distutils.util import strtobool
 
 import envpool
 import gym
@@ -79,6 +78,7 @@ def parse_args():
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     # fmt: on
     return args
+
 
 def make_env(env_id, seed, num_envs):
     def thunk():
@@ -258,7 +258,9 @@ if __name__ == "__main__":
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(cpu_next_done).to(device)
 
-            truncated = info["elapsed_step"] >= envs.spec.config.max_episode_steps # https://github.com/sail-sg/envpool/issues/239
+            truncated = (
+                info["elapsed_step"] >= envs.spec.config.max_episode_steps
+            )  # https://github.com/sail-sg/envpool/issues/239
             terminated = cpu_next_done
             done = truncated | terminated
             for idx, d in enumerate(done):
