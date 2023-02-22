@@ -127,8 +127,8 @@ class RecordEpisodeStatistics(gym.Wrapper):
 
     def step(self, action):
         observations, rewards, dones, infos = super().step(action)
-        truncated = info["elapsed_step"] >= envs.spec.config.max_episode_steps
-        terminated = info["terminated"]
+        truncated = infos["elapsed_step"] >= envs.spec.config.max_episode_steps
+        terminated = infos["terminated"]
         self.episode_returns += infos["reward"]
         self.episode_lengths += 1
         self.returned_episode_returns[:] = self.episode_returns
