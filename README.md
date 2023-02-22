@@ -53,10 +53,12 @@ poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 Pong-v5 \
     --command "poetry run python ppo_v3/ppo_atari_envpool.py --track" \
     --num-seeds 3
-    --workers 1
+    --workers 3
     --slurm-gpus-per-task 1 \
     --slurm-template-path ppov3.slurm_template
 ```
+> **Note** when running with slurm, `--workers` > 1 is ok. In fact `--workers` is the maximum concurrent jobs allowed in the job array in SLURM, and you should use a larger number like --workers 100 to maximize the utilization of the cluster.
+
 ```
 autotag feature is enabled
 identified git tag: v0.0.1-4-gb17d3b5
