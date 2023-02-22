@@ -103,15 +103,27 @@ We can then use this tag for comparing experiments leveraging the `openrlbenchma
 ```
 python -m openrlbenchmark.rlops \
     --filters '?we=openrlbenchmark&wpn=baselines&ceik=env&cen=exp_name&metric=charts/episodic_return' 'baselines-ppo2-cnn' \
-    --filters '?we=dream-team-v3&wpn=PPO-v3&ceik=env_id&cen=exp_name&metric=charts/episodic_return' 'ppo_atari_envpool' \
-    --env-ids Pong-v5 \
+    --filters '?we=dream-team-v3&wpn=PPO-v3&ceik=env_id&cen=exp_name&metric=charts/episodic_return' 'ppo_atari_envpool?tag=v0.0.1-5-g61d4028' \
+    --env-ids Breakout-v5 \
     --check-empty-runs False \
-    --ncols 5 \
-    --ncols-legend 2 \
+    --ncols 1 \
+    --ncols-legend 1 \
     --output-filename static/cleanrl_vs_baselines \
     --scan-history \
     --report
 ```
+It's going to generate the following plots:
+
+| cleanrl_vs_baselines.png             |  cleanrl_vs_baselines-time.png |
+:-------------------------:|:-------------------------:
+![](static/cleanrl_vs_baselines.png)  |  ![](static/cleanrl_vs_baselines-time.png)
+
+
+Furthermore, it will generate a table with the following information:
+
+|             | openrlbenchmark/baselines/baselines-ppo2-cnn ({})   | dream-team-v3/PPO-v3/ppo_atari_envpool ({'tag': ['v0.0.1-5-g61d4028']})   |
+|:------------|:----------------------------------------------------|:--------------------------------------------------------------------------|
+| Breakout-v5 | 405.73 ± 11.47                                      | 403.59 ± 0.00                                                             |
 
 ## Hyperparameter tuning
 

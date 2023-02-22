@@ -19,6 +19,7 @@ wandb = "^0.13.10"
 huggingface-hub = "^0.12.1"
 moviepy = "^1.0.3"
 openrlbenchmark = "^0.1.1b1"
+pre-commit = "^3.0.4"
 
 
 [build-system]

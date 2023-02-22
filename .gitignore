@@ -1,3 +1,5 @@
+*.pdf
+*.csv
 runs
 wandb
 slurm

@@ -81,6 +81,35 @@ def parse_args():
     return args
 
 
+ATARI_MAX_FRAMES = int(
+    108000 / 4
+)  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
+
+
+def make_env(env_id, seed, num_envs):
+    def thunk():
+        envs = envpool.make(
+            env_id,
+            env_type="gym",
+            num_envs=num_envs,
+            episodic_life=True,  # Espeholt et al., 2018, Tab. G.1
+            repeat_action_probability=0,  # Hessel et al., 2022 (Muesli) Tab. 10
+            noop_max=30,  # Espeholt et al., 2018, Tab. C.1 "Up to 30 no-ops at the beginning of each episode."
+            full_action_space=False,  # Espeholt et al., 2018, Appendix G., "Following related work, experts use game-specific action sets."
+            max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
+            reward_clip=True,
+            seed=seed,
+        )
+        envs.num_envs = num_envs
+        envs.single_action_space = envs.action_space
+        envs.single_observation_space = envs.observation_space
+        envs.is_vector_env = True
+        envs = RecordEpisodeStatistics(envs)
+        return envs
+
+    return thunk
+
+
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
         super().__init__(env)
@@ -182,18 +211,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = envpool.make(
-        args.env_id,
-        env_type="gym",
-        num_envs=args.num_envs,
-        episodic_life=True,
-        reward_clip=True,
-        seed=args.seed,
-    )
-    envs.num_envs = args.num_envs
-    envs.single_action_space = envs.action_space
-    envs.single_observation_space = envs.observation_space
-    envs = RecordEpisodeStatistics(envs)
+    envs = make_env(args.env_id, args.seed, args.num_envs)
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     agent = Agent(envs).to(device)

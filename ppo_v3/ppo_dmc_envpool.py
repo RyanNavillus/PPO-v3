@@ -80,6 +80,24 @@ def parse_args():
     # fmt: on
     return args
 
+def make_env(env_id, seed, num_envs):
+    def thunk():
+        envs = envpool.make(
+            env_id,
+            env_type="gym",
+            num_envs=num_envs,
+            seed=seed,
+        )
+        envs = FlattenObservation(envs)
+        envs.num_envs = num_envs
+        envs.single_action_space = envs.action_space
+        envs.single_observation_space = envs.observation_space
+        envs.is_vector_env = True
+        envs = RecordEpisodeStatistics(envs)
+        return envs
+
+    return thunk
+
 
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
@@ -192,17 +210,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = envpool.make(
-        args.env_id,
-        env_type="gym",
-        num_envs=args.num_envs,
-        seed=args.seed,
-    )
-    envs.num_envs = args.num_envs
-    envs = FlattenObservation(envs)
-    envs.single_action_space = envs.action_space
-    envs.single_observation_space = envs.observation_space
-    envs = RecordEpisodeStatistics(envs)
+    envs = make_env(args.env_id, args.seed, args.num_envs)
     assert isinstance(envs.action_space, gym.spaces.Box), "only discrete action space is supported"
 
     agent = Agent(envs).to(device)
