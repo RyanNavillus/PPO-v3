@@ -75,7 +75,7 @@ if __name__ == "__main__":
     args = parse_args()
     if args.auto_tag:
         wandb_tag = autotag()
-        if len(wandb_tag) > 0:
+        if len(wandb_tag) > 0 and "WANDB_TAGS" in os.environ:
             os.environ["WANDB_TAGS"] = os.environ["WANDB_TAGS"] + "," + wandb_tag
 
     commands = []

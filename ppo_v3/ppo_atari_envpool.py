@@ -5,6 +5,7 @@ import random
 import time
 from collections import deque
 from distutils.util import strtobool
+import uuid
 
 import envpool
 import gym
@@ -152,7 +153,7 @@ class Agent(nn.Module):
 
 if __name__ == "__main__":
     args = parse_args()
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
     if args.track:
         import wandb
 
