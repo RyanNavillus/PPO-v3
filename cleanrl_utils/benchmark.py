@@ -75,8 +75,11 @@ if __name__ == "__main__":
     args = parse_args()
     if args.auto_tag:
         wandb_tag = autotag()
-        if len(wandb_tag) > 0 and "WANDB_TAGS" in os.environ:
-            os.environ["WANDB_TAGS"] = os.environ["WANDB_TAGS"] + "," + wandb_tag
+        if len(wandb_tag) > 0:
+            if "WANDB_TAGS" in os.environ:
+                os.environ["WANDB_TAGS"] = os.environ["WANDB_TAGS"] + "," + wandb_tag
+            else:
+                os.environ["WANDB_TAGS"] = wandb_tag
 
     commands = []
     for seed in range(0, args.num_seeds):
