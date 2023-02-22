@@ -210,7 +210,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = make_env(args.env_id, args.seed, args.num_envs)
+    envs = make_env(args.env_id, args.seed, args.num_envs)()
     assert isinstance(envs.action_space, gym.spaces.Box), "only discrete action space is supported"
 
     agent = Agent(envs).to(device)
