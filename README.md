@@ -15,7 +15,7 @@ For quick and easy experiments, feel free to just run them with the `--track` fl
 
 The following commands will generate the dry run commands.
 ```bash
-python -m cleanrl_utils.benchmark \
+poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 Pong-v5 \
     --command "poetry run python ppo_v3/ppo_atari_envpool.py --track" \
     --num-seeds 3
@@ -37,7 +37,7 @@ not running the experiments because --workers is set to 0; just printing the com
 Once you are comfortable with the commands, you can run them with `--workers 1` to run them in a single machine
 
 ```
-python -m cleanrl_utils.benchmark \
+poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 Pong-v5 \
     --command "poetry run python ppo_v3/ppo_atari_envpool.py --track" \
     --num-seeds 3
@@ -49,7 +49,7 @@ python -m cleanrl_utils.benchmark \
 It is also possible to use slurm. For example, the following command will generate a slurm script and submit it to the slurm queue.
 
 ```
-python -m cleanrl_utils.benchmark \
+poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 Pong-v5 \
     --command "poetry run python ppo_v3/ppo_atari_envpool.py --track" \
     --num-seeds 3
@@ -130,7 +130,7 @@ Furthermore, it will generate a table with the following information:
 Generated wandb report: https://wandb.ai/costa-huang/cleanRL/reports/Regression-Report-ppo_atari_envpool--VmlldzozNjE4OTA2
 
 ```
-python -m openrlbenchmark.rlops \
+poetry run python -m openrlbenchmark.rlops \
     --filters '?we=dream-team-v3&wpn=PPO-v3&ceik=env_id&cen=exp_name&metric=charts/episodic_return' 'ppo_dmc_envpool?tag=v0.0.1-14-gb2aee2d' \
     --env-ids AcrobotSwingup-v1 CartpoleBalance-v1 CartpoleBalanceSparse-v1 CartpoleSwingup-v1 CartpoleSwingupSparse-v1 CheetahRun-v1 BallInCupCatch-v1 FingerSpin-v1 FingerTurnEasy-v1 FingerTurnHard-v1 HopperHop-v1 HopperStand-v1 PendulumSwingup-v1 ReacherEasy-v1 ReacherHard-v1 WalkerRun-v1 WalkerStand-v1 WalkerWalk-v1 \
     --check-empty-runs False \
