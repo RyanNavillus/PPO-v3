@@ -57,7 +57,7 @@ def autotag() -> str:
     git_commit = subprocess.check_output(["git", "rev-parse", "--verify", "HEAD"]).decode("ascii").strip()
     try:
         # try finding the pull request number on github
-        prs = requests.get(f"https://api.github.com/search/issues?q=repo:vwxyzjn/cleanrl+is:pr+{git_commit}")
+        prs = requests.get(f"https://api.github.com/search/issues?q=repo:RyanNavillus/PPO-v3+is:pr+{git_commit}")
         if prs.status_code == 200:
             prs = prs.json()
             if len(prs["items"]) > 0:
@@ -74,13 +74,9 @@ def autotag() -> str:
 if __name__ == "__main__":
     args = parse_args()
     if args.auto_tag:
-        if "WANDB_TAGS" in os.environ:
-            raise ValueError(
-                "WANDB_TAGS is already set. Please unset it before running this script or run the script with --auto-tag False"
-            )
         wandb_tag = autotag()
         if len(wandb_tag) > 0:
-            os.environ["WANDB_TAGS"] = wandb_tag
+            os.environ["WANDB_TAGS"] = os.environ["WANDB_TAGS"] + "," + wandb_tag
 
     commands = []
     for seed in range(0, args.num_seeds):
