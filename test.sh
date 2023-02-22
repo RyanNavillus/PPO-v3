@@ -17,9 +17,17 @@ python -m cleanrl_utils.benchmark \
     --slurm-template-path ppov3.slurm_template
 
 python -m cleanrl_utils.benchmark \
-    --env-ids  AcrobotSwingup-v1 CartpoleBalance-v1 CartpoleBalanceSparse-v1 CarpoletSwingup-v1 CartpoleSwingupSparse-v1 CheetahRun-v1 BallInCupCatch-v1 FingerSpin-v1 FingerTurnEasy-v1 FingerTurnHard-v1 HopperHop-v1 HopperStand-v1 PendulumSwingup-v1 ReacherEasy-v1 ReacherHard-v1 WalkerRun-v1 WalkerStand-v1 WalkerWalk-v1 \
+    --env-ids AcrobotSwingup-v1 CartpoleBalance-v1 CartpoleBalanceSparse-v1 CarpoleSwingup-v1 CartpoleSwingupSparse-v1 CheetahRun-v1 BallInCupCatch-v1 FingerSpin-v1 FingerTurnEasy-v1 FingerTurnHard-v1 HopperHop-v1 HopperStand-v1 PendulumSwingup-v1 ReacherEasy-v1 ReacherHard-v1 WalkerRun-v1 WalkerStand-v1 WalkerWalk-v1 \
     --command "poetry run python ppo_v3/ppo_dmc_envpool.py --track" \
-    --num-seeds 3 \
+    --num-seeds 1 \
     --workers 1 \
     --slurm-gpus-per-task 1 \
     --slurm-template-path ppov3.slurm_template
+
+
+python -m cleanrl_utils.benchmark \
+    --env-ids CartpoleSwingup-v1 \
+    --command "poetry run python ppo_v3/ppo_dmc_envpool.py --track" \
+    --num-seeds 1 \
+    --workers 1
+
