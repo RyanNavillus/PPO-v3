@@ -98,7 +98,7 @@ The experiments will be tagged with `v0.0.1-5-g61d4028`.
 > **Note** Wandb tags are super useful! You can also prepend the `python -m cleanrl_utils.benchmark` command with custom tags such as `WANDB_TAGS=rtx3060`. 
 
 
-We can then use this tag for comparing experiments leveraging the `openrlbenchmark` utility.
+We can then use this tag for comparing experiments leveraging the `openrlbenchmark` utility. Please see https://github.com/openrlbenchmark/openrlbenchmark for more documentation and ask Costa for more data.
 
 ```
 python -m openrlbenchmark.rlops \
