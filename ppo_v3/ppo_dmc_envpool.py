@@ -139,7 +139,9 @@ class FlattenObservation(gym.ObservationWrapper):
         self.observation_space = gym.spaces.flatten_space(env.observation_space)
 
     def observation(self, observation):
-        return np.concatenate([v for v in observation.values()], 1)
+        # here the reshape ensures items like `'dist_to_target' --> array([0., 0., 0., 0., 0., 0., 0., 0.])`
+        # will have shapes like `(8, 1)` instead of `(8,)`
+        return np.concatenate([v.reshape(self.num_envs, -1) for v in observation.values()], 1)
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
