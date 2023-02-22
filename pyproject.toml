@@ -4,7 +4,10 @@ version = "0.1.0"
 description = ""
 authors = ["Costa Huang <costa.huang@outlook.com>"]
 readme = "README.md"
-packages = [{include = "ppo_v3"}]
+packages = [
+    { include = "ppo_v3" },
+    { include = "cleanrl_utils" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -13,6 +16,8 @@ tensorboard = "^2.12.0"
 gymnasium = "^0.27.1"
 gym = "0.23.1"
 wandb = "^0.13.10"
+huggingface-hub = "^0.12.1"
+moviepy = "^1.0.3"
 
 
 [build-system]
