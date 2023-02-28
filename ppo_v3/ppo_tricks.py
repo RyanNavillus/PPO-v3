@@ -73,6 +73,13 @@ def parse_args():
     
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
+
+    # Dreamer Tricks
+    parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--unimix", type=float, default=None)
+    parser.add_argument("--percentile-scale", type=float, default=False)
+
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -108,6 +115,24 @@ def make_env(env_id, seed, num_envs):
 
     return thunk
 
+def symlog(x):
+    return torch.sign(x) * torch.log(1 + torch.abs(x))
+def symexp(x):
+    return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
+def twohot(x, B):
+    """
+    x has shape (n_vals, )
+    B has shape (n_bins, )
+    returns a th tensor of shape (n_vals, n_bins)
+    """
+    th = torch.zeros((x.shape+B.shape), dtype=x.dtype, device=x.device)
+    k1 = (B[None, :] < x[:, None]).sum(dim=-1)-1
+    k2 = k1+1
+
+    a, b = x-B[k1], B[k2]-x # val diff to left and right
+    th[range(len(k1)), k1] = b/(a+b) # assign left
+    th[range(len(k2)), k2] = a/(a+b) # assign right
+    return th
 
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
@@ -152,8 +177,9 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, args):
         super().__init__()
+        self.args = args
         self.network = nn.Sequential(
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
@@ -166,18 +192,41 @@ class Agent(nn.Module):
             nn.ReLU(),
         )
         self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
-        self.critic = layer_init(nn.Linear(512, 1), std=1)
+
+        self.B = torch.Parameter(torch.linspace(-20, 20, 256)) # (256, )
+        self.B.requires_grad = False
+        if self.args.twohot:
+            self.critic = layer_init(nn.Linear(512, len(self.B)), std=1)
+        else:
+            self.critic = layer_init(nn.Linear(512, 1), std=1)
+
+    def critic_val(self, net_out): # (b, 256)
+        if self.args.twohot:
+            logits_critic = self.critic(net_out)
+            val = symexp(logits_critic.softmax(dim=-1) @ self.B[:, None]) # (b, 256) @ (256, 1) = (b, 1)
+        else:
+            val = self.critic(net_out)
+            logits_critic = None
+        return val, logits_critic
 
     def get_value(self, x):
-        return self.critic(self.network(x / 255.0))
+        x = symlog(x) if self.args.symlog else x / 255.0
+        val, _ = self.critic_val(self.network(x))
+        return val
 
     def get_action_and_value(self, x, action=None):
-        hidden = self.network(x / 255.0)
+        x = symlog(x) if self.args.symlog else x / 255.0
+        hidden = self.network(x)
         logits = self.actor(hidden)
-        probs = Categorical(logits=logits)
+        dist = Categorical(logits=logits)
+        if self.args.unimix is not None:
+            uniform = torch.ones_like(dist.probs) / dist.probs.shape[-1]
+            probs = (1. - self.args.unimix) * dist.probs + self.args.unimix * uniform
+            dist = Categorical(probs=probs)
         if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
+            action = dist.sample()
+        val, logits_critic = self.critic_val(hidden)
+        return action, dist.log_prob(action), dist.entropy(), val, logits_critic
 
 
 if __name__ == "__main__":
@@ -248,7 +297,7 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(next_obs)
+                action, logprob, _, value, logits_critic = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
@@ -302,7 +351,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                _, newlogprob, entropy, newvalue, newlogitscritic = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
