@@ -5,7 +5,7 @@ import time
 import uuid
 from distutils.util import strtobool
 
-import envpool
+# import envpool
 import gym
 import numpy as np
 import torch
@@ -79,6 +79,11 @@ def parse_args():
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False)
     parser.add_argument("--unimix", type=float, default=None)
     parser.add_argument("--percentile-scale", type=float, default=False)
+    parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False)
+    # not done
+    parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--return-lambda", type=float, default=0.95)
+
 
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -119,20 +124,24 @@ def symlog(x):
     return torch.sign(x) * torch.log(1 + torch.abs(x))
 def symexp(x):
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
-def twohot(x, B):
+def calc_twohot(x, B):
     """
-    x has shape (n_vals, )
-    B has shape (n_bins, )
-    returns a th tensor of shape (n_vals, n_bins)
+    x shape:(n_vals, ) is tensor of values
+    B shape:(n_bins, ) is tensor of bin values
+    returns a twohot tensor of shape (n_vals, n_bins)
+
+    can verify this method is correct with:
+     - calc_twohot(x, B)@B == x # expected value reconstructs x
+     - (calc_twohot(x, B)>0).sum(dim=-1) == 2 # only two bins are hot
     """
-    th = torch.zeros((x.shape+B.shape), dtype=x.dtype, device=x.device)
+    twohot = torch.zeros((x.shape+B.shape), dtype=x.dtype, device=x.device)
     k1 = (B[None, :] < x[:, None]).sum(dim=-1)-1
     k2 = k1+1
 
     a, b = x-B[k1], B[k2]-x # val diff to left and right
-    th[range(len(k1)), k1] = b/(a+b) # assign left
-    th[range(len(k2)), k2] = a/(a+b) # assign right
-    return th
+    twohot[range(len(k1)), k1] = b/(a+b) # assign left
+    twohot[range(len(k2)), k2] = a/(a+b) # assign right
+    return twohot
 
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
@@ -195,10 +204,12 @@ class Agent(nn.Module):
 
         self.B = torch.Parameter(torch.linspace(-20, 20, 256)) # (256, )
         self.B.requires_grad = False
+
+        critic_std = 0.01 if args.critic_zero_init else 1.
         if self.args.twohot:
-            self.critic = layer_init(nn.Linear(512, len(self.B)), std=1)
+            self.critic = layer_init(nn.Linear(512, len(self.B)), std=critic_std)
         else:
-            self.critic = layer_init(nn.Linear(512, 1), std=1)
+            self.critic = layer_init(nn.Linear(512, 1), std=critic_std)
 
     def critic_val(self, net_out): # (b, 256)
         if self.args.twohot:
@@ -274,6 +285,7 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -299,6 +311,8 @@ if __name__ == "__main__":
             with torch.no_grad():
                 action, logprob, _, value, logits_critic = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
+                if args.two_hot:
+                    logits_critics[step] = logits_critic
             actions[step] = action
             logprobs[step] = logprob
 
@@ -317,6 +331,15 @@ if __name__ == "__main__":
                     print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
                     writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
+
+        # calculate lambda returns like in Dreamer-V3
+        ret = torch.zeros_like(rewards)
+        ret[-1] = values[-1]
+        for t in reversed(range(len(rewards))[:-1]):
+            ret[t] = rewards[t] + args.gamma*(~dones[t+1])*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
+        S = ret.quantile(.95) - ret.quantile(.05)
+        rewards = rewards / max(1., S.item())
+        # TODO: should we keep track of an EMA of S?
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -371,19 +394,23 @@ if __name__ == "__main__":
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Value loss
-                newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
+                if args.two_hot:
+                    twohot_target = calc_twohot(b_returns[mb_inds], agent.B)
+                    v_loss = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    newvalue = newvalue.view(-1)
+                    if args.clip_vloss:
+                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                        v_clipped = b_values[mb_inds] + torch.clamp(
+                            newvalue - b_values[mb_inds],
+                            -args.clip_coef,
+                            args.clip_coef,
+                        )
+                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
+                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                        v_loss = 0.5 * v_loss_max.mean()
+                    else:
+                        v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
