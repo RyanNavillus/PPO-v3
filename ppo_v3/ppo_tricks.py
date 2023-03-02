@@ -5,7 +5,7 @@ import time
 import uuid
 from distutils.util import strtobool
 
-# import envpool
+import envpool
 import gym
 import numpy as np
 import torch
@@ -70,8 +70,8 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    
-    parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+
+    parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
 
     # Dreamer Tricks
@@ -202,17 +202,17 @@ class Agent(nn.Module):
         )
         self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
 
-        self.B = torch.Parameter(torch.linspace(-20, 20, 256)) # (256, )
+        self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256)) # (256, )
         self.B.requires_grad = False
 
         critic_std = 0.01 if args.critic_zero_init else 1.
-        if self.args.twohot:
+        if self.args.two_hot:
             self.critic = layer_init(nn.Linear(512, len(self.B)), std=critic_std)
         else:
             self.critic = layer_init(nn.Linear(512, 1), std=critic_std)
 
     def critic_val(self, net_out): # (b, 256)
-        if self.args.twohot:
+        if self.args.two_hot:
             logits_critic = self.critic(net_out)
             val = symexp(logits_critic.softmax(dim=-1) @ self.B[:, None]) # (b, 256) @ (256, 1) = (b, 1)
         else:
@@ -273,7 +273,7 @@ if __name__ == "__main__":
     envs = make_env(args.env_id, args.seed, args.num_envs)()
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs).to(device)
+    agent = Agent(envs, args).to(device)
     if args.compile:
         agent = torch.compile(agent)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -336,7 +336,7 @@ if __name__ == "__main__":
         ret = torch.zeros_like(rewards)
         ret[-1] = values[-1]
         for t in reversed(range(len(rewards))[:-1]):
-            ret[t] = rewards[t] + args.gamma*(~dones[t+1])*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
+            ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
         S = ret.quantile(.95) - ret.quantile(.05)
         rewards = rewards / max(1., S.item())
         # TODO: should we keep track of an EMA of S?
