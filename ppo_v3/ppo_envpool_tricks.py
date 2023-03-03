@@ -215,7 +215,7 @@ class Agent(nn.Module):
         )
         self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
 
-        self.B = torch.nn.Parameter(torch.linspace(-20, 20, 128)) # (256, )
+        self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256)) # (256, )
         self.B.requires_grad = False
 
         critic_std = 0.01 if args.critic_zero_init else 1.
@@ -409,7 +409,8 @@ if __name__ == "__main__":
 
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(symlog(b_returns[mb_inds]), agent.B)
+                    with torch.no_grad(): # does this matter? Nothing in `calc_twohot` seems to require grad
+                        twohot_target = calc_twohot(symlog(b_returns[mb_inds]), agent.B)
                     v_loss = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     newvalue = newvalue.view(-1)
