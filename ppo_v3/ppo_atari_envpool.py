@@ -71,7 +71,7 @@ def parse_args():
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
     
-    parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+    parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -338,6 +338,7 @@ if __name__ == "__main__":
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                print(loss)
 
                 optimizer.zero_grad()
                 loss.backward()

@@ -13,6 +13,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+np.set_printoptions(threshold=10_000)
+torch.set_printoptions(profile="full")
 
 
 def parse_args():
@@ -78,7 +80,7 @@ def parse_args():
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False)
     parser.add_argument("--unimix", type=float, default=None)
-    parser.add_argument("--percentile-scale", type=float, default=False)
+    parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False)
     # not done
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False)
@@ -135,12 +137,23 @@ def calc_twohot(x, B):
      - (calc_twohot(x, B)>0).sum(dim=-1) == 2 # only two bins are hot
     """
     twohot = torch.zeros((x.shape+B.shape), dtype=x.dtype, device=x.device)
-    k1 = (B[None, :] < x[:, None]).sum(dim=-1)-1
+    k1 = (B[None, :] <= x[:, None]).sum(dim=-1)-1
     k2 = k1+1
+    k1 = torch.clip(k1, 0, len(B) - 1)
+    k2 = torch.clip(k2, 0, len(B) - 1)
 
-    a, b = x-B[k1], B[k2]-x # val diff to left and right
-    twohot[range(len(k1)), k1] = b/(a+b) # assign left
-    twohot[range(len(k2)), k2] = a/(a+b) # assign right
+    # Handle k1 == k2 case
+    equal = (k1 == k2)
+    dist_to_below = torch.where(equal, 1, torch.abs(B[k1] - x))
+    dist_to_above = torch.where(equal, 1, torch.abs(B[k2] - x))
+
+    # Assign values to two-hot tensor
+    total = dist_to_above + dist_to_below
+    weight_below = dist_to_above / total
+    weight_above = dist_to_below / total
+    x_range = np.arange(len(x))
+    twohot[x_range, k1] = weight_below   # assign left
+    twohot[x_range, k2] = weight_above   # assign right
     return twohot
 
 class RecordEpisodeStatistics(gym.Wrapper):
@@ -333,12 +346,13 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
         # calculate lambda returns like in Dreamer-V3
-        ret = torch.zeros_like(rewards)
-        ret[-1] = values[-1]
-        for t in reversed(range(len(rewards))[:-1]):
-            ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
-        S = ret.quantile(.95) - ret.quantile(.05)
-        rewards = rewards / max(1., S.item())
+        if args.percentile_scale:
+            ret = torch.zeros_like(rewards)
+            ret[-1] = values[-1]
+            for t in reversed(range(len(rewards))[:-1]):
+                ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
+            S = ret.quantile(.95) - ret.quantile(.05)
+            rewards = rewards / max(1., S.item())
         # TODO: should we keep track of an EMA of S?
 
         # bootstrap value if not done
