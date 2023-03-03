@@ -145,7 +145,7 @@ def calc_twohot(x, B):
     # Handle k1 == k2 case
     equal = (k1 == k2)
     dist_to_below = torch.where(equal, 1, torch.abs(B[k1] - x))
-    dist_to_above = torch.where(equal, 1, torch.abs(B[k2] - x))
+    dist_to_above = torch.where(equal, 0, torch.abs(B[k2] - x))
 
     # Assign values to two-hot tensor
     total = dist_to_above + dist_to_below
