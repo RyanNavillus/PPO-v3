@@ -79,7 +79,7 @@ def parse_args():
     # Dreamer Tricks
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False)
-    parser.add_argument("--unimix", type=float, default=None)
+    parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False)
     # not done
@@ -192,8 +192,12 @@ class RecordEpisodeStatistics(gym.Wrapper):
         )
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
+def layer_init(layer, zero=False, std=np.sqrt(2), bias_const=0.0):
+    if zero:
+        torch.nn.init.zeros_(layer.weight)
+    else:
+        torch.nn.init.orthogonal_(layer.weight, std)
+
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
@@ -215,19 +219,17 @@ class Agent(nn.Module):
         )
         self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
 
-        self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256)) # (256, )
-        self.B.requires_grad = False
-
-        critic_std = 0.01 if args.critic_zero_init else 1.
-        if self.args.two_hot:
-            self.critic = layer_init(nn.Linear(512, len(self.B)), std=critic_std)
+        if args.two_hot:
+            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
+            self.B.requires_grad = False
+            self.critic = layer_init(nn.Linear(512, len(self.B)), zero=args.critic_zero_init, std=1)
         else:
-            self.critic = layer_init(nn.Linear(512, 1), std=critic_std)
+            self.critic = layer_init(nn.Linear(512, 1), zero=args.critic_zero_init, std=1)
 
-    def critic_val(self, net_out): # (b, 256)
+    def critic_val(self, net_out):  # (b, 256)
         if self.args.two_hot:
             logits_critic = self.critic(net_out)
-            val = symexp(logits_critic.softmax(dim=-1) @ self.B[:, None]) # (b, 256) @ (256, 1) = (b, 1)
+            val = symexp(logits_critic.softmax(dim=-1) @ self.B[:, None])   # (b, 256) @ (256, 1) = (b, 1)
         else:
             val = self.critic(net_out)
             logits_critic = None
@@ -243,10 +245,12 @@ class Agent(nn.Module):
         hidden = self.network(x)
         logits = self.actor(hidden)
         dist = Categorical(logits=logits)
-        if self.args.unimix is not None:
-            uniform = torch.ones_like(dist.probs) / dist.probs.shape[-1]
-            probs = (1. - self.args.unimix) * dist.probs + self.args.unimix * uniform
-            dist = Categorical(probs=probs)
+
+        # Unimix
+        uniform = torch.ones_like(dist.probs) / dist.probs.shape[-1]
+        probs = (1. - self.args.unimix) * dist.probs + self.args.unimix * uniform
+        dist = Categorical(probs=probs)
+
         if action is None:
             action = dist.sample()
         val, logits_critic = self.critic_val(hidden)
@@ -298,7 +302,8 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
+    if args.two_hot:
+        logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
