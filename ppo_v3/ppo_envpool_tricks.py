@@ -304,6 +304,8 @@ if __name__ == "__main__":
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
     if args.two_hot:
         logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
+    if args.percentile_scale:
+        low_ema = high_ema = torch.zeros(()).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -352,13 +354,16 @@ if __name__ == "__main__":
 
         # calculate lambda returns like in Dreamer-V3
         if args.percentile_scale:
-            ret = torch.zeros_like(rewards)
-            ret[-1] = values[-1]
-            for t in reversed(range(len(rewards))[:-1]):
-                ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
-            S = ret.quantile(.95) - ret.quantile(.05)
-            rewards = rewards / max(1., S.item())
-        # TODO: should we keep track of an EMA of S?
+            with torch.no_grad():
+                ret = torch.zeros_like(rewards)
+                ret[-1] = values[-1]
+                for t in reversed(range(len(rewards))[:-1]):
+                    ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
+                low, high = ret.quantile(0.05), ret.quantile(0.95)
+                low_ema = low if low_ema is None else 0.99 * low_ema + (1 - 0.99) * low
+                high_ema = high if high_ema is None else 0.99 * high_ema + (1 - 0.99) * high
+                S = high_ema - low_ema
+                rewards = rewards / max(1., S.item())
 
         # bootstrap value if not done
         with torch.no_grad():
