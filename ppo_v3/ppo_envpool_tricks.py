@@ -408,26 +408,26 @@ if __name__ == "__main__":
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Apply symlog
-                b_returns_mb_inds = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
-                b_values_mb_inds = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
+                mb_returns = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
+                mb_values = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
                 newvalue = symlog(newvalue) if args.symlog else newvalue
 
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(symlog(b_returns[mb_inds]), agent.B)
+                    twohot_target = calc_twohot(symlog(mb_returns), agent.B)
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
-                    v_loss_unclipped = (newvalue - b_returns_mb_inds) ** 2
+                    v_loss_unclipped = (newvalue - mb_returns) ** 2
 
                 # Value clipping
                 if args.clip_vloss:
                     newvalue = newvalue.view(-1)
-                    v_clipped = b_values_mb_inds + torch.clamp(
-                        newvalue - b_values_mb_inds,
+                    v_clipped = mb_values + torch.clamp(
+                        newvalue - mb_values,
                         -args.clip_coef,
                         args.clip_coef,
                     )
-                    v_loss_clipped = (v_clipped - b_returns_mb_inds) ** 2
+                    v_loss_clipped = (v_clipped - mb_returns) ** 2
                     v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
                     v_loss = 0.5 * v_loss_max.mean()
                 else:
