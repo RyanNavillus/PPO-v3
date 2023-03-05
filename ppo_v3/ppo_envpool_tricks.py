@@ -105,12 +105,12 @@ def make_env(env_id, seed, num_envs):
             env_id,
             env_type="gym",
             num_envs=num_envs,
-            episodic_life=True,  # Espeholt et al., 2018, Tab. G.1
-            repeat_action_probability=0,  # Hessel et al., 2022 (Muesli) Tab. 10
-            noop_max=30,  # Espeholt et al., 2018, Tab. C.1 "Up to 30 no-ops at the beginning of each episode."
-            full_action_space=False,  # Espeholt et al., 2018, Appendix G., "Following related work, experts use game-specific action sets."
+            episodic_life=False,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
+            repeat_action_probability=0.25,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
+            noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
+            full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=True,
+            reward_clip=False, # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             seed=seed,
         )
         envs.num_envs = num_envs
@@ -412,24 +412,31 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
+                # Apply symlog
+                mb_returns = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
+                mb_values = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
+                newvalue = symlog(newvalue) if args.symlog else newvalue
+
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(b_returns[mb_inds], agent.B)
-                    v_loss = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
+                    twohot_target = calc_twohot(symlog(mb_returns), agent.B)
+                    v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
+                    v_loss_unclipped = (newvalue - mb_returns) ** 2
+
+                # Value clipping
+                if args.clip_vloss:
                     newvalue = newvalue.view(-1)
-                    if args.clip_vloss:
-                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                        v_clipped = b_values[mb_inds] + torch.clamp(
-                            newvalue - b_values[mb_inds],
-                            -args.clip_coef,
-                            args.clip_coef,
-                        )
-                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                        v_loss = 0.5 * v_loss_max.mean()
-                    else:
-                        v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                    v_clipped = mb_values + torch.clamp(
+                        newvalue - mb_values,
+                        -args.clip_coef,
+                        args.clip_coef,
+                    )
+                    v_loss_clipped = (v_clipped - mb_returns) ** 2
+                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                    v_loss = 0.5 * v_loss_max.mean()
+                else:
+                    v_loss = v_loss_unclipped if args.two_hot else 0.5 * v_loss_unclipped.mean()
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
