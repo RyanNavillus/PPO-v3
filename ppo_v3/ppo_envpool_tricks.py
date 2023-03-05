@@ -305,7 +305,8 @@ if __name__ == "__main__":
     if args.two_hot:
         logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
     if args.percentile_scale:
-        low_ema = high_ema = torch.zeros(()).to(device)
+        low_ema = torch.zeros(()).to(device)
+        high_ema = torch.zeros(()).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
