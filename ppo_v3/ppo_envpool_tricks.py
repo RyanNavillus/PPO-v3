@@ -408,12 +408,18 @@ if __name__ == "__main__":
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Value loss
-                if args.two_hot:
-                    twohot_target = calc_twohot(b_returns[mb_inds], agent.B)
-                    v_loss = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
-                else:
+                if args.clip_vloss:
                     newvalue = newvalue.view(-1)
-                    if args.clip_vloss:
+                    if args.two_hot:
+                        twohot_target = calc_twohot(symlog(b_returns[mb_inds]), agent.B)
+                        v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
+                        v_clipped = symlog(b_values[mb_inds]) + torch.clamp(
+                            symlog(newvalue) - symlog(b_values[mb_inds]),
+                            -args.clip_coef,
+                            args.clip_coef,
+                        )
+                        v_loss_clipped = (v_clipped - symlog(b_returns[mb_inds])) ** 2
+                    else:
                         v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
                         v_clipped = b_values[mb_inds] + torch.clamp(
                             newvalue - b_values[mb_inds],
@@ -421,8 +427,12 @@ if __name__ == "__main__":
                             args.clip_coef,
                         )
                         v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                        v_loss = 0.5 * v_loss_max.mean()
+                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                    v_loss = 0.5 * v_loss_max.mean()
+                else:
+                    if args.two_hot:
+                        twohot_target = calc_twohot(symlog(b_returns[mb_inds]), agent.B)
+                        v_loss = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                     else:
                         v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
