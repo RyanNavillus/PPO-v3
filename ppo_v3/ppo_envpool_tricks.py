@@ -264,6 +264,26 @@ class Agent(nn.Module):
         return action, dist.log_prob(action), dist.entropy(), val, logits_critic
 
 
+class SlowCritic():
+    def __init__(self, critic, args):
+        self.critic = critic
+        if args.two_hot:
+            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
+            self.B.requires_grad = False
+            self.slow = layer_init(nn.Linear(512, len(self.B)), zero=args.critic_zero_init, std=1)
+        else:
+            self.slow = layer_init(nn.Linear(512, 1), zero=args.critic_zero_init, std=1)
+
+    def update(self):
+
+        for fast, slow in zip(self.critic.parameters(), self.slow.parameters()):
+            pass
+
+    def read(self, mb_obs, mb_actions):
+        # TODO: Replicate agent get_actions_and_value
+        pass
+
+
 if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
@@ -413,6 +433,7 @@ if __name__ == "__main__":
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue, newlogitscritic = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                _, _, _, _, newlogitscritic = slow.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -442,6 +463,10 @@ if __name__ == "__main__":
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
+
+                # Critic EMA
+                reg = 1.0
+                v_loss_unclipped += reg
 
                 # Value clipping
                 if args.clip_vloss:
