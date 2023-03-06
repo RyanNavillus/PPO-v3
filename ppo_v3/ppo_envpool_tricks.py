@@ -122,10 +122,15 @@ def make_env(env_id, seed, num_envs):
 
     return thunk
 
+
 def symlog(x):
     return torch.sign(x) * torch.log(1 + torch.abs(x))
+
+
 def symexp(x):
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
+
+
 def calc_twohot(x, B):
     """
     x shape:(n_vals, ) is tensor of values
@@ -155,6 +160,7 @@ def calc_twohot(x, B):
     twohot[x_range, k1] = weight_below   # assign left
     twohot[x_range, k2] = weight_above   # assign right
     return twohot
+
 
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
@@ -229,7 +235,8 @@ class Agent(nn.Module):
     def critic_val(self, net_out):  # (b, 256)
         if self.args.two_hot:
             logits_critic = self.critic(net_out)
-            val = symexp(logits_critic.softmax(dim=-1) @ self.B[:, None])   # (b, 256) @ (256, 1) = (b, 1)
+            val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
+            val = symexp(val) if args.symlog else val
         else:
             val = self.critic(net_out)
             logits_critic = None
