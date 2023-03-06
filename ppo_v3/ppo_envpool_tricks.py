@@ -110,7 +110,7 @@ def make_env(env_id, seed, num_envs):
             noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
             full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=False, # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            reward_clip=True, # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             seed=seed,
         )
         envs.num_envs = num_envs
@@ -359,12 +359,15 @@ if __name__ == "__main__":
                 ret = torch.zeros_like(rewards)
                 ret[-1] = values[-1]
                 for t in reversed(range(len(rewards))[:-1]):
-                    ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
+                    lam = args.return_lambda
+                    ret[t] = (rewards[t] + args.gamma * (~(dones[t+1] > 0)) *
+                              ((1-lam) * values[t+1] + lam * ret[t+1]))
                 low, high = ret.quantile(0.05), ret.quantile(0.95)
-                low_ema = low if low_ema is None else 0.99 * low_ema + (1 - 0.99) * low
-                high_ema = high if high_ema is None else 0.99 * high_ema + (1 - 0.99) * high
+                ema_decay = 0.97
+                low_ema = low if low_ema is None else ema_decay * low_ema + (1 - ema_decay) * low
+                high_ema = high if high_ema is None else ema_decay * high_ema + (1 - ema_decay) * high
                 S = high_ema - low_ema
-                rewards = rewards / max(1., S.item())
+                #rewards = rewards / max(1., S.item())
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -381,6 +384,9 @@ if __name__ == "__main__":
                 delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
+            if args.percentile_scale:
+                with torch.no_grad():
+                    returns = (returns - low_ema) / max(1, S.item())
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -421,18 +427,17 @@ if __name__ == "__main__":
                 # Apply symlog
                 mb_returns = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
                 mb_values = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
-                newvalue = symlog(newvalue) if args.symlog else newvalue
+                newvalue = symlog(newvalue.view(-1)) if args.symlog else newvalue.view(-1)
 
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(symlog(mb_returns), agent.B)
+                    twohot_target = calc_twohot(mb_returns, agent.B)
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
 
                 # Value clipping
                 if args.clip_vloss:
-                    newvalue = newvalue.view(-1)
                     v_clipped = mb_values + torch.clamp(
                         newvalue - mb_values,
                         -args.clip_coef,

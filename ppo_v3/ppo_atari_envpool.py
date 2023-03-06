@@ -338,7 +338,6 @@ if __name__ == "__main__":
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-                print(loss)
 
                 optimizer.zero_grad()
                 loss.backward()
