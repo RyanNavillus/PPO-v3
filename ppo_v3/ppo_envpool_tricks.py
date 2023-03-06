@@ -4,6 +4,7 @@ import random
 import time
 import uuid
 from distutils.util import strtobool
+from copy import deepcopy
 
 import envpool
 import gym
@@ -264,24 +265,18 @@ class Agent(nn.Module):
         return action, dist.log_prob(action), dist.entropy(), val, logits_critic
 
 
-class SlowCritic():
-    def __init__(self, critic, args):
-        self.critic = critic
-        if args.two_hot:
-            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
-            self.B.requires_grad = False
-            self.slow = layer_init(nn.Linear(512, len(self.B)), zero=args.critic_zero_init, std=1)
-        else:
-            self.slow = layer_init(nn.Linear(512, 1), zero=args.critic_zero_init, std=1)
+# class SlowCritic():
+#     def __init__(self, agent, critic, args):
+#         self.fast = agent
+#         self.slow = critic
 
-    def update(self):
+#     def update(self):
+#         # TODO: Check this works
+#         for fast, slow in zip(self.fast.parameters(), self.slow.parameters()):
+#             slow = 0.02 * fast + (1 - 0.02) * slow
 
-        for fast, slow in zip(self.critic.parameters(), self.slow.parameters()):
-            pass
+#     def read(self, mb_obs, mb_actions):
 
-    def read(self, mb_obs, mb_actions):
-        # TODO: Replicate agent get_actions_and_value
-        pass
 
 
 if __name__ == "__main__":
@@ -321,6 +316,13 @@ if __name__ == "__main__":
     if args.compile:
         agent = torch.compile(agent)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    # Create EMA of critic parameters
+    if args.critic_ema:
+        critic_ema = Agent(envs, args).to(device)
+        critic_ema.network = agent.network
+        critic_ema.actor = agent.actor
+        critic_ema.critic = deepcopy(agent.critic)
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -433,7 +435,6 @@ if __name__ == "__main__":
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue, newlogitscritic = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
-                _, _, _, _, newlogitscritic = slow.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -465,8 +466,10 @@ if __name__ == "__main__":
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
 
                 # Critic EMA
-                reg = 1.0
-                v_loss_unclipped += reg
+                if args.critic_ema:
+                    _, logprob, _, _, _ = critic_ema.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                    reg = -torch.mean(logprob)
+                    v_loss_unclipped += reg
 
                 # Value clipping
                 if args.clip_vloss:
@@ -488,6 +491,16 @@ if __name__ == "__main__":
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
+                
+                # Update Critic EMA weights
+                if args.critic_ema:
+                    with torch.no_grad():
+                        #prev_params = deepcopy(list(critic_ema.critic.parameters()))
+                        for fast, slow in zip(agent.critic.parameters(), critic_ema.critic.parameters()):
+                            slow.copy_(0.02 * fast + (1 - 0.02) * slow)
+                    
+                        #for i, param in enumerate(critic_ema.critic.parameters()):
+                        #    print(param - prev_params[i])
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
