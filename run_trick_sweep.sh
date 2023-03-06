@@ -1,37 +1,37 @@
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 \
-    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_symlog --symlog True --total_timesteps 2000000 --track" \
-    --num-seeds 3
+    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_symlog --symlog True --total-timesteps 2000000 --track" \
+    --num-seeds 3 \
     --workers 1
 
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 \
-    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_twohot --two-hot True --total_timesteps 2000000 --track" \
-    --num-seeds 3
+    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_twohot --two-hot True --total-timesteps 2000000 --track" \
+    --num-seeds 3 \
     --workers 1
 
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 \
-    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_percentile --percentile-scaling True --total_timesteps 2000000 --track" \
-    --num-seeds 3
+    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_percentile --percentile-scale True --total-timesteps 2000000 --track" \
+    --num-seeds 3 \
     --workers 1
 
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 \
-    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_unimix --unimix 0.01 --total_timesteps 2000000 --track" \
-    --num-seeds 3
+    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_unimix --unimix 0.01 --total-timesteps 2000000 --track" \
+    --num-seeds 3 \
     --workers 1
 
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 \
-    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_zero --critic-zero-init True --total_timesteps 2000000 --track" \
-    --num-seeds 3
-    --workers 1
+    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_zero --critic-zero-init True --total-timesteps 2000000 --track" \
+    --num-seeds 3 \
+    --workers 1 \
 
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids Breakout-v5 \
-    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_all -symlog True --two-hot True --percentile-scaling True --unimix 0.01 --critic-zero-init True --total_timesteps 2000000 --track" \
-    --num-seeds 3
+    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_all --symlog True --two-hot True --percentile-scale True --unimix 0.01 --critic-zero-init True --total-timesteps 2000000 --track" \
+    --num-seeds 3 \
     --workers 1
 
 python -m openrlbenchmark.rlops \
