@@ -181,7 +181,6 @@ if __name__ == "__main__":
     args.batch_size = args.local_batch_size * args.world_size
     args.minibatch_size = args.local_minibatch_size * args.world_size
     dist.init_process_group(args.backend)
-    torch.cuda.set_device(args.local_rank)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
     if args.local_rank == 0:
         if args.track:
@@ -330,7 +329,7 @@ if __name__ == "__main__":
             # prepare data
             T, B = env_ids.shape
             index_ranges = torch.arange(T * B, dtype=torch.int32)
-            next_index_ranges = torch.zeros_like(index_ranges, dtype=torch.int32)
+            next_index_ranges = torch.zeros_like(index_ranges, dtype=torch.long)
             last_env_ids = torch.zeros(args.local_num_envs, dtype=torch.int32) - 1
             carry = (last_env_ids, next_index_ranges)
             for x in zip(env_ids.reshape(-1), index_ranges):

@@ -318,7 +318,7 @@ if __name__ == "__main__":
             # prepare data
             T, B = env_ids.shape
             index_ranges = torch.arange(T * B, dtype=torch.int32)
-            next_index_ranges = torch.zeros_like(index_ranges, dtype=torch.int32)
+            next_index_ranges = torch.zeros_like(index_ranges, dtype=torch.long)
             last_env_ids = torch.zeros(args.num_envs, dtype=torch.int32) - 1
             carry = (last_env_ids, next_index_ranges)
             for x in zip(env_ids.reshape(-1), index_ranges):
