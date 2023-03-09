@@ -236,12 +236,12 @@ class Agent(nn.Module):
         return val, logits_critic
 
     def get_value(self, x):
-        x = symlog(x) if self.args.symlog else x / 255.0
+        x = x / 255.0
         val, _ = self.critic_val(self.network(x))
         return val
 
     def get_action_and_value(self, x, action=None):
-        x = symlog(x) if self.args.symlog else x / 255.0
+        x = x / 255.0
         hidden = self.network(x)
         logits = self.actor(hidden)
         dist = Categorical(logits=logits)
