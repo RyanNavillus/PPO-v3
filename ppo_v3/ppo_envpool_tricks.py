@@ -110,7 +110,7 @@ def make_env(env_id, seed, num_envs):
             noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
             full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=args.symlog,    # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            reward_clip=not args.symlog,    # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             seed=seed,
         )
         envs.num_envs = num_envs
@@ -370,7 +370,7 @@ if __name__ == "__main__":
                     ret[t] = (rewards[t] + args.gamma * (~(dones[t+1] > 0)) *
                               ((1-lam) * values[t+1] + lam * ret[t+1]))
                 low, high = ret.quantile(0.05), ret.quantile(0.95)
-                ema_decay = 0.97
+                ema_decay = 0.99
                 low_ema = low if low_ema is None else ema_decay * low_ema + (1 - ema_decay) * low
                 high_ema = high if high_ema is None else ema_decay * high_ema + (1 - ema_decay) * high
                 S = high_ema - low_ema
