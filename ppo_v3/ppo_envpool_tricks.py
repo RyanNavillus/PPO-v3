@@ -472,9 +472,9 @@ if __name__ == "__main__":
 
                 # Critic EMA
                 if args.critic_ema:
-                    _, logits_cma = critic_ema.critic_val(b_obs[mb_inds])
+                    _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
                     # regularize output distributiont to match that of the EMA critic
-                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_cma.softmax(dim=-1), reduction='none')
+                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
                     v_loss_unclipped = v_loss_unclipped + args.coef_critic_ema * v_loss_reg.mean()
 
                 # Value clipping
