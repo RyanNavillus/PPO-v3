@@ -10,7 +10,6 @@ import envpool
 import gym
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
@@ -44,7 +43,7 @@ def parse_args():
         help="total timesteps of the experiments")
     parser.add_argument("--learning-rate", type=float, default=2.5e-4,
         help="the learning rate of the optimizer")
-    parser.add_argument("--local-num-envs", type=int, default=8,
+    parser.add_argument("--num-envs", type=int, default=8,
         help="the number of parallel game environments")
     parser.add_argument("--async-batch-size", type=int, default=4,
         help="the envpool's batch size in the async mode")
@@ -77,12 +76,10 @@ def parse_args():
     
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
-    parser.add_argument("--backend", type=str, default="nccl", choices=["gloo", "nccl", "mpi"],
-        help="the backend to use for distributed training")
     args = parser.parse_args()
-    args.local_batch_size = int(args.local_num_envs * args.num_steps)
-    args.local_minibatch_size = int(args.local_batch_size // args.num_minibatches)
-    args.async_update = int(args.local_num_envs / args.async_batch_size)
+    args.batch_size = int(args.num_envs * args.num_steps)
+    args.minibatch_size = int(args.batch_size // args.num_minibatches)
+    args.async_update = int(args.num_envs / args.async_batch_size)
     # fmt: on
     return args
 
@@ -122,20 +119,61 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-class Network(nn.Module):
-    def __init__(self):
+# taken from https://github.com/AIcrowd/neurips2020-procgen-starter-kit/blob/142d09586d2272a17f44481a115c4bd817cf6a94/models/impala_cnn_torch.py
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
         super().__init__()
-        self.network = nn.Sequential(
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
+        self.conv0 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        inputs = x
+        x = nn.functional.relu(x)
+        x = self.conv0(x)
+        x = nn.functional.relu(x)
+        x = self.conv1(x)
+        return x + inputs
+
+
+class ConvSequence(nn.Module):
+    def __init__(self, input_shape, out_channels):
+        super().__init__()
+        self._input_shape = input_shape
+        self._out_channels = out_channels
+        self.conv = nn.Conv2d(in_channels=self._input_shape[0], out_channels=self._out_channels, kernel_size=3, padding=1)
+        self.res_block0 = ResidualBlock(self._out_channels)
+        self.res_block1 = ResidualBlock(self._out_channels)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = nn.functional.max_pool2d(x, kernel_size=3, stride=2, padding=1)
+        x = self.res_block0(x)
+        x = self.res_block1(x)
+        assert x.shape[1:] == self.get_output_shape()
+        return x
+
+    def get_output_shape(self):
+        _c, h, w = self._input_shape
+        return (self._out_channels, (h + 1) // 2, (w + 1) // 2)
+
+
+class Network(nn.Module):
+    def __init__(self, envs):
+        super().__init__()
+        c, h, w = envs.single_observation_space.shape
+        shape = (c, h, w)
+        conv_seqs = []
+        for out_channels in [16, 32, 32]:
+            conv_seq = ConvSequence(shape, out_channels)
+            shape = conv_seq.get_output_shape()
+            conv_seqs.append(conv_seq)
+        conv_seqs += [
             nn.Flatten(),
-            layer_init(nn.Linear(64 * 7 * 7, 512)),
             nn.ReLU(),
-        )
+            nn.Linear(in_features=shape[0] * shape[1] * shape[2], out_features=256),
+            nn.ReLU(),
+        ]
+        self.network = nn.Sequential(*conv_seqs)
     
     def forward(self, x):
         return self.network(x)
@@ -143,7 +181,7 @@ class Network(nn.Module):
 class Actor(nn.Module):
     def __init__(self, envs):
         super().__init__()
-        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+        self.actor = layer_init(nn.Linear(256, envs.single_action_space.n), std=0.01)
     
     def forward(self, x):
         return self.actor(x)
@@ -151,7 +189,7 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self):
         super().__init__()
-        self.critic = layer_init(nn.Linear(512, 1), std=1)
+        self.critic = layer_init(nn.Linear(256, 1), std=1)
     
     def forward(self, x):
         return self.critic(x)
@@ -173,34 +211,72 @@ def get_action_and_value2(network, actor, critic, x, action):
     return action, probs.log_prob(action), probs.entropy(), critic(hidden)
 
 
+def gae(args, device, envs, obs, actions, env_ids, logprobs, rewards, dones, values):
+    with torch.no_grad():
+            # prepare data
+        T, B = env_ids.shape
+        index_ranges = torch.arange(T * B, dtype=torch.int32)
+        next_index_ranges = torch.zeros_like(index_ranges, dtype=torch.long)
+        last_env_ids = torch.zeros(args.num_envs, dtype=torch.int32) - 1
+        carry = (last_env_ids, next_index_ranges)
+        for x in zip(env_ids.reshape(-1), index_ranges):
+            last_env_ids, next_index_ranges = carry
+            env_id, index_range = x
+            next_index_ranges[last_env_ids[env_id]] = torch.where(last_env_ids[env_id] != -1, index_range, next_index_ranges[last_env_ids[env_id]])
+            last_env_ids[env_id] = index_range
+        rewards = rewards.reshape(-1)[next_index_ranges].reshape((args.num_steps) * args.async_update, args.async_batch_size)
+
+            # calculate GAE
+        final_env_id_checked = torch.zeros(args.num_envs, dtype=torch.int32, device=device) - 1
+        final_env_ids = torch.zeros_like(dones, dtype=torch.int32, device=device)
+        advantages = torch.zeros((T, B), device=device)
+        lastgaelam = torch.zeros(args.num_envs, device=device)
+        lastdones = torch.zeros(args.num_envs, device=device) + 1
+        lastvalues = torch.zeros(args.num_envs, device=device) # TODO: we can leverage lastobs to get the lastvalues
+        for t in reversed(range(T)):
+            eid = env_ids[t]
+            nextnonterminal = 1.0 - lastdones[eid]
+            nextvalues = lastvalues[eid]
+            delta = torch.where(
+                    final_env_id_checked[eid] == -1, 0, rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                )
+            advantages[t] = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam[eid]
+            final_env_ids[t] = torch.where(final_env_id_checked[eid] == 1, 1, 0)
+            final_env_id_checked[eid] = torch.where(final_env_id_checked[eid] == -1, 1, final_env_id_checked[eid])
+                # the last_ variables keeps track of the actual `num_steps`
+            lastgaelam[eid] = advantages[t]
+            lastdones[eid] = dones[t]
+            lastvalues[eid] = values[t]
+        returns = advantages + values
+
+    b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+    b_logprobs = logprobs.reshape(-1)
+    b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
+    b_advantages = advantages.reshape(-1)
+    b_returns = returns.reshape(-1)
+    b_values = values.reshape(-1)
+    return b_obs,b_logprobs,b_actions,b_advantages,b_returns,b_values
+
 if __name__ == "__main__":
     args = parse_args()
-    args.world_size = int(os.environ["WORLD_SIZE"])
-    args.local_rank = int(os.environ["RANK"])
-    args.num_envs = args.local_num_envs * args.world_size
-    args.batch_size = args.local_batch_size * args.world_size
-    args.minibatch_size = args.local_minibatch_size * args.world_size
-    dist.init_process_group(args.backend)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
-    args.seed += args.local_rank
-    if args.local_rank == 0:
-        if args.track:
-            import wandb
+    if args.track:
+        import wandb
 
-            wandb.init(
-                project=args.wandb_project_name,
-                entity=args.wandb_entity,
-                sync_tensorboard=True,
-                config=vars(args),
-                name=run_name,
-                monitor_gym=True,
-                save_code=True,
-            )
-        writer = SummaryWriter(f"runs/{run_name}")
-        writer.add_text(
-            "hyperparameters",
-            "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+        wandb.init(
+            project=args.wandb_project_name,
+            entity=args.wandb_entity,
+            sync_tensorboard=True,
+            config=vars(args),
+            name=run_name,
+            monitor_gym=True,
+            save_code=True,
         )
+    writer = SummaryWriter(f"runs/{run_name}")
+    writer.add_text(
+        "hyperparameters",
+        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+    )
 
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
@@ -211,11 +287,11 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = make_env(args.env_id, args.seed, args.local_num_envs, args.async_batch_size)()
+    envs = make_env(args.env_id, args.seed, args.num_envs, args.async_batch_size)()
     envs.async_reset()
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    network = Network().to(device)
+    network = Network(envs).to(device)
     actor = Actor(envs).to(device)
     critic = Critic().to(device)
 
@@ -226,12 +302,13 @@ if __name__ == "__main__":
         get_action_and_value = torch.compile(get_action_and_value)
         get_action_and_value2 = torch.compile(get_action_and_value2)
         get_value = torch.compile(get_value)
+        gae = torch.compile(gae)
 
-    agent_params = list(network.parameters()) + \
-        list(actor.parameters()) + \
-        list(critic.parameters())
-    for p in agent_params:
-        dist.broadcast(p.data, src=0)
+    agent_params = itertools.chain(*[
+        network.parameters(),
+        actor.parameters(),
+        critic.parameters(),
+    ])
     optimizer = optim.Adam(agent_params, lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
@@ -243,15 +320,15 @@ if __name__ == "__main__":
     dones = torch.zeros((args.num_steps * args.async_update, args.async_batch_size)).to(device)
     values = torch.zeros((args.num_steps * args.async_update, args.async_batch_size)).to(device)
 
-    lastobs = torch.zeros((args.local_num_envs,) + envs.single_observation_space.shape).to(device)
-    lastdones = torch.zeros((args.local_num_envs,)).to(device)
-    lastrewards = torch.zeros((args.local_num_envs,)).to(device)
-    lastenvids = np.zeros((args.local_num_envs,), dtype=np.int32)
+    lastobs = torch.zeros((args.num_envs,) + envs.single_observation_space.shape).to(device)
+    lastdones = torch.zeros((args.num_envs,)).to(device)
+    lastrewards = torch.zeros((args.num_envs,)).to(device)
+    lastenvids = np.zeros((args.num_envs,), dtype=np.int32)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
-    num_updates = args.total_timesteps // args.local_batch_size
+    num_updates = args.total_timesteps // args.batch_size
     next_obs, next_reward, next_done, info = envs.recv()
     next_obs = torch.Tensor(next_obs).to(device)
     next_reward = torch.Tensor(next_reward).to(device).view(-1)
@@ -260,10 +337,10 @@ if __name__ == "__main__":
     lastdones[info["env_id"]] = next_done
     lastrewards[info["env_id"]] = next_reward
 
-    episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    episode_returns = np.zeros((args.num_envs,), dtype=np.float32)
+    returned_episode_returns = np.zeros((args.num_envs,), dtype=np.float32)
+    episode_lengths = np.zeros((args.num_envs,), dtype=np.float32)
+    returned_episode_lengths = np.zeros((args.num_envs,), dtype=np.float32)
 
     for update in range(1, num_updates + 1):
         update_time_start = time.time()
@@ -276,7 +353,7 @@ if __name__ == "__main__":
         for step in range(args.num_steps * args.async_update):
             # next_obs, next_reward, next_done, info = envs.recv()
             # next_obs = torch.Tensor(next_obs).to(device)
-            global_step += args.async_batch_size * args.world_size
+            global_step += args.async_batch_size
             obs[step] = next_obs
             dones[step] = next_done
             rewards[step] = next_reward
@@ -314,69 +391,22 @@ if __name__ == "__main__":
             lastobs[info["env_id"]] = next_obs
             lastdones[info["env_id"]] = next_done
             lastrewards[info["env_id"]] = next_reward
-            # for idx, d in enumerate(done):
-            #     if d:
-            #         print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
-            #         writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
-            #         writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
-        if args.local_rank == 0:
-            avg_episodic_return = np.mean(returned_episode_returns)
-            writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
-            writer.add_scalar("charts/avg_episodic_length", np.mean(returned_episode_lengths), global_step)
-            print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
+
+        avg_episodic_return = np.mean(returned_episode_returns)
+        writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
+        writer.add_scalar("charts/avg_episodic_length", np.mean(returned_episode_lengths), global_step)
+        print(f"global_step={global_step}, avg_episodic_return={avg_episodic_return}")
 
 
-        with torch.no_grad():
-            # prepare data
-            T, B = env_ids.shape
-            index_ranges = torch.arange(T * B, dtype=torch.int32)
-            next_index_ranges = torch.zeros_like(index_ranges, dtype=torch.long)
-            last_env_ids = torch.zeros(args.local_num_envs, dtype=torch.int32) - 1
-            carry = (last_env_ids, next_index_ranges)
-            for x in zip(env_ids.reshape(-1), index_ranges):
-                last_env_ids, next_index_ranges = carry
-                env_id, index_range = x
-                next_index_ranges[last_env_ids[env_id]] = torch.where(last_env_ids[env_id] != -1, index_range, next_index_ranges[last_env_ids[env_id]])
-                last_env_ids[env_id] = index_range
-            rewards = rewards.reshape(-1)[next_index_ranges].reshape((args.num_steps) * args.async_update, args.async_batch_size)
-
-            # calculate GAE
-            final_env_id_checked = torch.zeros(args.local_num_envs, dtype=torch.int32).to(device) - 1
-            final_env_ids = torch.zeros_like(dones, dtype=torch.int32).to(device)
-            advantages = torch.zeros((T, B)).to(device)
-            lastgaelam = torch.zeros(args.local_num_envs).to(device)
-            lastdones = torch.zeros(args.local_num_envs).to(device) + 1
-            lastvalues = torch.zeros(args.local_num_envs).to(device) # TODO: we can leverage lastobs to get the lastvalues
-            for t in reversed(range(T)):
-                eid = env_ids[t]
-                nextnonterminal = 1.0 - lastdones[eid]
-                nextvalues = lastvalues[eid]
-                delta = torch.where(
-                    final_env_id_checked[eid] == -1, 0, rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                )
-                advantages[t] = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam[eid]
-                final_env_ids[t] = torch.where(final_env_id_checked[eid] == 1, 1, 0)
-                final_env_id_checked[eid] = torch.where(final_env_id_checked[eid] == -1, 1, final_env_id_checked[eid])
-                # the last_ variables keeps track of the actual `num_steps`
-                lastgaelam[eid] = advantages[t]
-                lastdones[eid] = dones[t]
-                lastvalues[eid] = values[t]
-            returns = advantages + values
-
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
-        b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = advantages.reshape(-1)
-        b_returns = returns.reshape(-1)
-        b_values = values.reshape(-1)
+        b_obs, b_logprobs, b_actions, b_advantages, b_returns, b_values = gae(args, device, envs, obs, actions, env_ids, logprobs, rewards, dones, values)
 
         # Optimizing the policy and value network
-        b_inds = np.arange(args.local_batch_size)
+        b_inds = np.arange(args.batch_size)
         clipfracs = []
         for epoch in range(args.update_epochs):
             np.random.shuffle(b_inds)
-            for start in range(0, args.local_batch_size, args.local_minibatch_size):
-                end = start + args.local_minibatch_size
+            for start in range(0, args.batch_size, args.minibatch_size):
+                end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue = get_action_and_value2(network, actor, critic, b_obs[mb_inds], b_actions.long()[mb_inds])
@@ -418,23 +448,7 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad()
                 loss.backward()
-
-                # batch allreduce ops: see https://github.com/entity-neural-network/incubator/pull/220
-                all_grads_list = []
-                for param in agent_params:
-                    if param.grad is not None:
-                        all_grads_list.append(param.grad.view(-1))
-                all_grads = torch.cat(all_grads_list)
-                dist.all_reduce(all_grads, op=dist.ReduceOp.SUM)
-                offset = 0
-                for param in agent_params:
-                    if param.grad is not None:
-                        param.grad.data.copy_(
-                            all_grads[offset : offset + param.numel()].view_as(param.grad.data) / args.world_size
-                        )
-                        offset += param.numel()
-
-                nn.utils.clip_grad_norm_(agent_params, args.max_grad_norm)
+                # nn.utils.clip_grad_norm_(agent_params, args.max_grad_norm)
                 optimizer.step()
 
             if args.target_kl is not None:
@@ -446,23 +460,20 @@ if __name__ == "__main__":
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
-        if args.local_rank == 0:
-            writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-            writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-            writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-            writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-            writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-            writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-            writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-            writer.add_scalar("losses/explained_variance", explained_var, global_step)
-            print("SPS:", int(global_step / (time.time() - start_time)))
-            writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-            writer.add_scalar(
-                "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - update_time_start)), global_step
-            )
+        writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
+        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
+        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
+        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+        writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
+        writer.add_scalar("losses/explained_variance", explained_var, global_step)
+        # print("SPS:", int(global_step / (time.time() - start_time)))
+        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+        writer.add_scalar(
+            "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - update_time_start)), global_step
+        )
+        print("SPS_update:", int(args.num_envs * args.num_steps / (time.time() - update_time_start)))
 
     envs.close()
-    if args.local_rank == 0:
-        writer.close()
-        if args.track:
-            wandb.finish()
+    writer.close()

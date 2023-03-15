@@ -16,6 +16,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 
 def parse_args():
     # fmt: off
@@ -122,20 +124,61 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-class Network(nn.Module):
-    def __init__(self):
+# taken from https://github.com/AIcrowd/neurips2020-procgen-starter-kit/blob/142d09586d2272a17f44481a115c4bd817cf6a94/models/impala_cnn_torch.py
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
         super().__init__()
-        self.network = nn.Sequential(
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
+        self.conv0 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        inputs = x
+        x = nn.functional.relu(x)
+        x = self.conv0(x)
+        x = nn.functional.relu(x)
+        x = self.conv1(x)
+        return x + inputs
+
+
+class ConvSequence(nn.Module):
+    def __init__(self, input_shape, out_channels):
+        super().__init__()
+        self._input_shape = input_shape
+        self._out_channels = out_channels
+        self.conv = nn.Conv2d(in_channels=self._input_shape[0], out_channels=self._out_channels, kernel_size=3, padding=1)
+        self.res_block0 = ResidualBlock(self._out_channels)
+        self.res_block1 = ResidualBlock(self._out_channels)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = nn.functional.max_pool2d(x, kernel_size=3, stride=2, padding=1)
+        x = self.res_block0(x)
+        x = self.res_block1(x)
+        assert x.shape[1:] == self.get_output_shape()
+        return x
+
+    def get_output_shape(self):
+        _c, h, w = self._input_shape
+        return (self._out_channels, (h + 1) // 2, (w + 1) // 2)
+
+
+class Network(nn.Module):
+    def __init__(self, envs):
+        super().__init__()
+        c, h, w = envs.single_observation_space.shape
+        shape = (c, h, w)
+        conv_seqs = []
+        for out_channels in [16, 32, 32]:
+            conv_seq = ConvSequence(shape, out_channels)
+            shape = conv_seq.get_output_shape()
+            conv_seqs.append(conv_seq)
+        conv_seqs += [
             nn.Flatten(),
-            layer_init(nn.Linear(64 * 7 * 7, 512)),
             nn.ReLU(),
-        )
+            nn.Linear(in_features=shape[0] * shape[1] * shape[2], out_features=256),
+            nn.ReLU(),
+        ]
+        self.network = nn.Sequential(*conv_seqs)
     
     def forward(self, x):
         return self.network(x)
@@ -143,7 +186,7 @@ class Network(nn.Module):
 class Actor(nn.Module):
     def __init__(self, envs):
         super().__init__()
-        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+        self.actor = layer_init(nn.Linear(256, envs.single_action_space.n), std=0.01)
     
     def forward(self, x):
         return self.actor(x)
@@ -151,7 +194,7 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self):
         super().__init__()
-        self.critic = layer_init(nn.Linear(512, 1), std=1)
+        self.critic = layer_init(nn.Linear(256, 1), std=1)
     
     def forward(self, x):
         return self.critic(x)
@@ -215,9 +258,12 @@ if __name__ == "__main__":
     envs.async_reset()
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    network = Network().to(device)
+    network = Network(envs).to(device)
     actor = Actor(envs).to(device)
     critic = Critic().to(device)
+    network = DDP(network)
+    actor = DDP(actor)
+    critic = DDP(critic)
 
     if args.compile:
         network = torch.compile(network)
@@ -418,22 +464,6 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad()
                 loss.backward()
-
-                # batch allreduce ops: see https://github.com/entity-neural-network/incubator/pull/220
-                all_grads_list = []
-                for param in agent_params:
-                    if param.grad is not None:
-                        all_grads_list.append(param.grad.view(-1))
-                all_grads = torch.cat(all_grads_list)
-                dist.all_reduce(all_grads, op=dist.ReduceOp.SUM)
-                offset = 0
-                for param in agent_params:
-                    if param.grad is not None:
-                        param.grad.data.copy_(
-                            all_grads[offset : offset + param.numel()].view_as(param.grad.data) / args.world_size
-                        )
-                        offset += param.numel()
-
                 nn.utils.clip_grad_norm_(agent_params, args.max_grad_norm)
                 optimizer.step()
 
