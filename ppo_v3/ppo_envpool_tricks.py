@@ -79,13 +79,13 @@ def parse_args():
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
 
     # Dreamer Tricks
-    parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False)
-    parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--unimix", type=float, default=0.0)
-    parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False)
-    parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     # not done
-    parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--coef-critic-ema", type=float, default=1.)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
@@ -525,7 +525,7 @@ if __name__ == "__main__":
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
+        rint("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
         writer.add_scalar(
             "charts/SPS_update", int(args.num_envs * args.num_steps / (time.time() - update_time_start)), global_step
