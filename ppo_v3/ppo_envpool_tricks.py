@@ -3,7 +3,6 @@ import os
 import random
 import time
 import uuid
-from copy import deepcopy
 from distutils.util import strtobool
 
 import envpool
@@ -14,9 +13,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-
-np.set_printoptions(threshold=10_000)
-torch.set_printoptions(profile="full")
 
 
 def parse_args():
@@ -83,12 +79,12 @@ def parse_args():
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    # not done
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--coef-critic-ema", type=float, default=1.)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
+    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
     parser.add_argument("--return-lambda", type=float, default=0.95)
-
 
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -267,20 +263,6 @@ class Agent(nn.Module):
         return action, dist.log_prob(action), dist.entropy(), val, logits_critic
 
 
-# class SlowCritic():
-#     def __init__(self, agent, critic, args):
-#         self.fast = agent
-#         self.slow = critic
-
-#     def update(self):
-#         # TODO: Check this works
-#         for fast, slow in zip(self.fast.parameters(), self.slow.parameters()):
-#             slow = 0.02 * fast + (1 - 0.02) * slow
-
-#     def read(self, mb_obs, mb_actions):
-
-
-
 if __name__ == "__main__":
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
@@ -324,7 +306,8 @@ if __name__ == "__main__":
         critic_ema = Agent(envs, args).to(device)
         critic_ema.network = agent.network
         critic_ema.actor = agent.actor
-        critic_ema.critic = deepcopy(agent.critic)
+        # TODO: Test if this is correct
+        critic_ema.critic.load_state_dict(agent.critic.state_dict())
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -394,11 +377,10 @@ if __name__ == "__main__":
                     ret[t] = (rewards[t] + args.gamma * (~(dones[t+1] > 0)) *
                               ((1-lam) * values[t+1] + lam * ret[t+1]))
                 low, high = ret.quantile(0.05), ret.quantile(0.95)
-                ema_decay = 0.99
-                low_ema = low if low_ema is None else ema_decay * low_ema + (1 - ema_decay) * low
-                high_ema = high if high_ema is None else ema_decay * high_ema + (1 - ema_decay) * high
+                decay = args.percentile_ema_rate
+                low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
+                high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
-
                 rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
 
         # bootstrap value if not done
@@ -416,9 +398,6 @@ if __name__ == "__main__":
                 delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
-            if args.percentile_scale:
-                with torch.no_grad():
-                    returns = (returns - low_ema) / max(1, S.item())
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -501,12 +480,9 @@ if __name__ == "__main__":
                 # Update Critic EMA weights
                 if args.critic_ema:
                     with torch.no_grad():
-                        #prev_params = deepcopy(list(critic_ema.critic.parameters()))
+                        decay = args.critic_ema_rate
                         for fast, slow in zip(agent.critic.parameters(), critic_ema.critic.parameters()):
-                            slow.copy_(0.02 * fast + (1 - 0.02) * slow)
-                    
-                        #for i, param in enumerate(critic_ema.critic.parameters()):
-                        #    print(param - prev_params[i])
+                            slow.copy_(decay * slow + (1 - decay) * fast)
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
@@ -533,8 +509,3 @@ if __name__ == "__main__":
 
     envs.close()
     writer.close()
-
-# critic ema regularization
-# percentile scaling inside of GAE to match the Dreamer-V3
-# 
-
