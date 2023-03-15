@@ -3,8 +3,8 @@ import os
 import random
 import time
 import uuid
-from distutils.util import strtobool
 from copy import deepcopy
+from distutils.util import strtobool
 
 import envpool
 import gym
@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+
 np.set_printoptions(threshold=10_000)
 torch.set_printoptions(profile="full")
 
@@ -85,6 +86,7 @@ def parse_args():
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False)
     # not done
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--coef-critic-ema", type=float, default=1.)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
 
@@ -396,7 +398,8 @@ if __name__ == "__main__":
                 low_ema = low if low_ema is None else ema_decay * low_ema + (1 - ema_decay) * low
                 high_ema = high if high_ema is None else ema_decay * high_ema + (1 - ema_decay) * high
                 S = high_ema - low_ema
-                #rewards = rewards / max(1., S.item())
+
+                rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -424,6 +427,8 @@ if __name__ == "__main__":
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
+        if args.two_hot:
+            b_logits_critics = logits_critics.reshape(-1, len(agent.B))
 
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
@@ -467,9 +472,10 @@ if __name__ == "__main__":
 
                 # Critic EMA
                 if args.critic_ema:
-                    _, logprob, _, _, _ = critic_ema.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
-                    reg = -torch.mean(logprob)
-                    v_loss_unclipped += reg
+                    _, logits_cma = critic_ema.critic_val(b_obs[mb_inds])
+                    # regularize output distributiont to match that of the EMA critic
+                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_cma.softmax(dim=-1), reduction='none')
+                    v_loss_unclipped = v_loss_unclipped + args.coef_critic_ema * v_loss_reg.mean()
 
                 # Value clipping
                 if args.clip_vloss:
@@ -527,3 +533,8 @@ if __name__ == "__main__":
 
     envs.close()
     writer.close()
+
+# critic ema regularization
+# percentile scaling inside of GAE to match the Dreamer-V3
+# 
+
