@@ -13,8 +13,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-np.set_printoptions(threshold=10_000)
-torch.set_printoptions(profile="full")
 
 
 def parse_args():
@@ -77,15 +75,16 @@ def parse_args():
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
 
     # Dreamer Tricks
-    parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False)
-    parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--unimix", type=float, default=0.0)
-    parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False)
-    parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False)
-    # not done
-    parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False)
+    parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
+    parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
+    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
     parser.add_argument("--return-lambda", type=float, default=0.95)
-
 
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -110,7 +109,7 @@ def make_env(env_id, seed, num_envs):
             noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
             full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=False, # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            reward_clip=not args.symlog,    # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             seed=seed,
         )
         envs.num_envs = num_envs
@@ -122,10 +121,15 @@ def make_env(env_id, seed, num_envs):
 
     return thunk
 
+
 def symlog(x):
     return torch.sign(x) * torch.log(1 + torch.abs(x))
+
+
 def symexp(x):
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
+
+
 def calc_twohot(x, B):
     """
     x shape:(n_vals, ) is tensor of values
@@ -155,6 +159,7 @@ def calc_twohot(x, B):
     twohot[x_range, k1] = weight_below   # assign left
     twohot[x_range, k2] = weight_above   # assign right
     return twohot
+
 
 class RecordEpisodeStatistics(gym.Wrapper):
     def __init__(self, env, deque_size=100):
@@ -229,7 +234,8 @@ class Agent(nn.Module):
     def critic_val(self, net_out):  # (b, 256)
         if self.args.two_hot:
             logits_critic = self.critic(net_out)
-            val = symexp(logits_critic.softmax(dim=-1) @ self.B[:, None])   # (b, 256) @ (256, 1) = (b, 1)
+            val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
+            val = symexp(val) if args.symlog else val
         else:
             val = self.critic(net_out)
             logits_critic = None
@@ -295,6 +301,14 @@ if __name__ == "__main__":
         agent = torch.compile(agent)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
+    # Create EMA of critic parameters
+    if args.critic_ema:
+        critic_ema = Agent(envs, args).to(device)
+        critic_ema.network = agent.network
+        critic_ema.actor = agent.actor
+        # TODO: Test if this is correct
+        critic_ema.critic.load_state_dict(agent.critic.state_dict())
+
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
     actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
@@ -304,6 +318,9 @@ if __name__ == "__main__":
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
     if args.two_hot:
         logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
+    if args.percentile_scale:
+        low_ema = torch.zeros(()).to(device)
+        high_ema = torch.zeros(()).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -352,13 +369,19 @@ if __name__ == "__main__":
 
         # calculate lambda returns like in Dreamer-V3
         if args.percentile_scale:
-            ret = torch.zeros_like(rewards)
-            ret[-1] = values[-1]
-            for t in reversed(range(len(rewards))[:-1]):
-                ret[t] = rewards[t] + args.gamma*(~(dones[t+1]>0))*((1-args.return_lambda)*values[t+1] + args.return_lambda*ret[t+1])
-            S = ret.quantile(.95) - ret.quantile(.05)
-            rewards = rewards / max(1., S.item())
-        # TODO: should we keep track of an EMA of S?
+            with torch.no_grad():
+                ret = torch.zeros_like(rewards)
+                ret[-1] = values[-1]
+                for t in reversed(range(len(rewards))[:-1]):
+                    lam = args.return_lambda
+                    ret[t] = (rewards[t] + args.gamma * (~(dones[t+1] > 0)) *
+                              ((1-lam) * values[t+1] + lam * ret[t+1]))
+                low, high = ret.quantile(0.05), ret.quantile(0.95)
+                decay = args.percentile_ema_rate
+                low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
+                high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
+                S = high_ema - low_ema
+                rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -383,6 +406,8 @@ if __name__ == "__main__":
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
+        if args.two_hot:
+            b_logits_critics = logits_critics.reshape(-1, len(agent.B))
 
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
@@ -415,18 +440,24 @@ if __name__ == "__main__":
                 # Apply symlog
                 mb_returns = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
                 mb_values = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
-                newvalue = symlog(newvalue) if args.symlog else newvalue
+                newvalue = symlog(newvalue.view(-1)) if args.symlog else newvalue.view(-1)
 
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(symlog(mb_returns), agent.B)
+                    twohot_target = calc_twohot(mb_returns, agent.B)
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
 
+                # Critic EMA
+                if args.critic_ema:
+                    _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
+                    # regularize output distributiont to match that of the EMA critic
+                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
+                    v_loss_unclipped = v_loss_unclipped + args.coef_critic_ema * v_loss_reg.mean()
+
                 # Value clipping
                 if args.clip_vloss:
-                    newvalue = newvalue.view(-1)
                     v_clipped = mb_values + torch.clamp(
                         newvalue - mb_values,
                         -args.clip_coef,
@@ -445,6 +476,13 @@ if __name__ == "__main__":
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
+                
+                # Update Critic EMA weights
+                if args.critic_ema:
+                    with torch.no_grad():
+                        decay = args.critic_ema_rate
+                        for fast, slow in zip(agent.critic.parameters(), critic_ema.critic.parameters()):
+                            slow.copy_(decay * slow + (1 - decay) * fast)
 
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
