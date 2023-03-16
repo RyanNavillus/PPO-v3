@@ -4,6 +4,7 @@ import random
 import time
 import uuid
 from distutils.util import strtobool
+from copy import deepcopy
 
 import envpool
 import gym
@@ -454,7 +455,7 @@ if __name__ == "__main__":
                     _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
                     # regularize output distributiont to match that of the EMA critic
                     v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
-                    v_loss_unclipped = v_loss_unclipped + args.coef_critic_ema * v_loss_reg.mean()
+                    v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
 
                 # Value clipping
                 if args.clip_vloss:
@@ -483,7 +484,6 @@ if __name__ == "__main__":
                         decay = args.critic_ema_rate
                         for fast, slow in zip(agent.critic.parameters(), critic_ema.critic.parameters()):
                             slow.copy_(decay * slow + (1 - decay) * fast)
-
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
