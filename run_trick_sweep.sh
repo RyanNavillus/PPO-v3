@@ -1,7 +1,7 @@
 timesteps=100000
 env_id="Breakout-v5 MsPacman-v5 Assault-v5 Zaxxon-v5 Tennis-v5"
 seeds=2
-workers=2
+workers=1
 gittag=$(git describe --tags)
 
 poetry run python -m cleanrl_utils.benchmark \
