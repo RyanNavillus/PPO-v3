@@ -1,4 +1,4 @@
-timesteps=100000
+timesteps=10000000
 env_id="Breakout-v5 MsPacman-v5 Assault-v5 Zaxxon-v5 Tennis-v5"
 seeds=2
 workers=1
