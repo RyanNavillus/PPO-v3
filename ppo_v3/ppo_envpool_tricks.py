@@ -15,6 +15,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from .human_normalized_scores import calculate_hns
+
 
 def parse_args():
     # fmt: off
@@ -366,6 +368,7 @@ if __name__ == "__main__":
                 if d:
                     print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
                     writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
+                    writer.add_scalar("charts/human_normalized_score", calculate_hns(args.env_d, info["r"][idx]), global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
         # calculate lambda returns like in Dreamer-V3
