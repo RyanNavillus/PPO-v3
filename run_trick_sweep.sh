@@ -4,23 +4,30 @@ seeds=2
 workers=1
 gittag=$(git describe --tags)
 
-#poetry run python -m cleanrl_utils.benchmark \
-#    --env-ids $env_id \
-#    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_none --total-timesteps $timesteps --track" \
-#    --num-seeds $seeds \
-#    --workers $workers
-#
-#poetry run python -m cleanrl_utils.benchmark \
-#    --env-ids $env_id \
-#    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_all --symlog True --two-hot True --percentile-scale True --critic-ema --unimix 0.01 --critic-zero-init True --total-timesteps $timesteps --track" \
-#    --num-seeds $seeds \
-#    --workers $workers
-#
-#poetry run python -m cleanrl_utils.benchmark \
-#    --env-ids $env_id \
-#    --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_symlog --symlog True --total-timesteps $timesteps --track" \
-#    --num-seeds $seeds \
-#    --workers $workers
+# Command Example:
+# poetry run python -m cleanrl_utils.benchmark \
+#    --env-ids Breakout-v5 \
+#    --command "poetry run python ppo_v3/ppo_envpool_tricks_symlog.py --exp-name ppo_envpool_tricks_symlog --symlog True --total-timesteps 10000000 --track" \
+#    --num-seeds 1 \
+#    --workers 1
+
+poetry run python -m cleanrl_utils.benchmark \
+   --env-ids $env_id \
+   --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_none --total-timesteps $timesteps --track" \
+   --num-seeds $seeds \
+   --workers $workers
+
+poetry run python -m cleanrl_utils.benchmark \
+   --env-ids $env_id \
+   --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_all --symlog True --two-hot True --percentile-scale True --critic-ema --unimix 0.01 --critic-zero-init True --total-timesteps $timesteps --track" \
+   --num-seeds $seeds \
+   --workers $workers
+
+poetry run python -m cleanrl_utils.benchmark \
+   --env-ids $env_id \
+   --command "poetry run python ppo_v3/ppo_envpool_tricks.py --exp-name ppo_envpool_tricks_symlog --symlog True --total-timesteps $timesteps --track" \
+   --num-seeds $seeds \
+   --workers $workers
 
 poetry run python -m cleanrl_utils.benchmark \
     --env-ids $env_id \
