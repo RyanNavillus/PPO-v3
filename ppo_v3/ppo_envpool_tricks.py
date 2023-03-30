@@ -238,10 +238,10 @@ class Agent(nn.Module):
         if self.args.two_hot:
             logits_critic = self.critic(net_out)
             val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
-            val = symexp(val) if args.symlog else val
         else:
             val = self.critic(net_out)
             logits_critic = None
+        val = symexp(val) if args.symlog else val
         return val, logits_critic
 
     def get_value(self, x):
