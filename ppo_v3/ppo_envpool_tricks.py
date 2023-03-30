@@ -241,6 +241,7 @@ class Agent(nn.Module):
             val = symexp(val) if args.symlog else val
         else:
             val = self.critic(net_out)
+            val = symexp(val) if args.symlog else val
             logits_critic = None
         return val, logits_critic
 

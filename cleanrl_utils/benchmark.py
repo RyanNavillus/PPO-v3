@@ -64,7 +64,7 @@ def autotag() -> str:
                 pr = prs["items"][0]
                 pr_number = pr["number"]
                 wandb_tag += f",pr-{pr_number}"
-        print(f"identified github pull request: {pr_number}")
+                print(f"identified github pull request: {pr_number}")
     except Exception as e:
         print(e)
 
@@ -98,6 +98,7 @@ if __name__ == "__main__":
             executor.submit(run_experiment, command)
         executor.shutdown(wait=True)
     else:
+        print(args.workers, args.slurm_template_path)
         print("not running the experiments because --workers is set to 0; just printing the commands to run")
 
     # SLURM logic
