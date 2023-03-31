@@ -371,6 +371,10 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/human_normalized_score", calculate_hns(args.env_id, info["r"][idx]), global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
+        if args.symlog:
+            rewards = symlog(rewards)
+            values = symlog(values)
+
         # calculate lambda returns like in Dreamer-V3
         if args.percentile_scale:
             with torch.no_grad():
@@ -390,6 +394,8 @@ if __name__ == "__main__":
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
+            if args.symlog:
+                next_value = symlog(next_value)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
@@ -423,6 +429,8 @@ if __name__ == "__main__":
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue, newlogitscritic = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
+                if args.symlog:
+                    newvalue = symlog(newvalue)
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -441,10 +449,9 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                # Apply symlog
-                mb_returns = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
-                mb_values = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
-                newvalue = symlog(newvalue.view(-1)) if args.symlog else newvalue.view(-1)
+                mb_returns = b_returns[mb_inds]
+                mb_values = b_values[mb_inds]
+                newvalue = newvalue.view(-1)
 
                 # Value loss
                 if args.two_hot:
