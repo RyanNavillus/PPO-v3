@@ -240,7 +240,7 @@ class Agent(nn.Module):
             val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
         else:
             val = self.critic(net_out)
-            logits_critic = None
+            logits_critic = val
         val = symexp(val) if args.symlog else val
         return val, logits_critic
 
@@ -455,9 +455,11 @@ if __name__ == "__main__":
 
                 # Critic EMA
                 if args.critic_ema:
-                    _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
-                    # regularize output distributiont to match that of the EMA critic
-                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
+                    with torch.no_grad():
+                        _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
+                    # regularize output distribution to match that of the EMA critic
+                    ema_output = logits_ema.softmax(dim=-1) if args.two_hot else logits_ema
+                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, ema_output, reduction='sum')
                     v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
 
                 # Value clipping
