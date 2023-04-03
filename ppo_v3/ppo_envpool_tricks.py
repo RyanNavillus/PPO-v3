@@ -462,7 +462,7 @@ if __name__ == "__main__":
                         v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='sum')
                     else:
                         val_ema = symlog(val_ema.view(-1)) if args.symlog else val_ema.view(-1)
-                        v_loss_reg = (newvalue - val_ema) ** 2
+                        v_loss_reg = 0.5 * ((newvalue - val_ema) ** 2).mean()
                     v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
 
                 # Value clipping
