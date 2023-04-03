@@ -375,8 +375,8 @@ if __name__ == "__main__":
             rewards = symlog(rewards)
             values = symlog(values)
 
-        # calculate lambda returns like in Dreamer-V3
         if args.percentile_scale:
+            # calculate lambda returns like in Dreamer-V3
             with torch.no_grad():
                 ret = torch.zeros_like(rewards)
                 ret[-1] = values[-1]
@@ -389,25 +389,28 @@ if __name__ == "__main__":
                 low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
                 high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
-                rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
+                returns = (ret - low_ema) / max(1., S.item())
+                advantages = returns - values
+                # rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
 
-        # bootstrap value if not done
-        with torch.no_grad():
-            next_value = agent.get_value(next_obs).reshape(1, -1)
-            if args.symlog:
-                next_value = symlog(next_value)
-            advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
-                else:
-                    nextnonterminal = 1.0 - dones[t + 1]
-                    nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            returns = advantages + values
+        else:
+            # bootstrap value if not done
+            with torch.no_grad():
+                next_value = agent.get_value(next_obs).reshape(1, -1)
+                if args.symlog:
+                    next_value = symlog(next_value)
+                advantages = torch.zeros_like(rewards).to(device)
+                lastgaelam = 0
+                for t in reversed(range(args.num_steps)):
+                    if t == args.num_steps - 1:
+                        nextnonterminal = 1.0 - next_done
+                        nextvalues = next_value
+                    else:
+                        nextnonterminal = 1.0 - dones[t + 1]
+                        nextvalues = values[t + 1]
+                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                returns = advantages + values
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
