@@ -459,7 +459,7 @@ if __name__ == "__main__":
                         _, _, _, val_ema, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
                     # regularize output distribution to match that of the EMA critic
                     if args.two_hot:
-                        v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='sum')
+                        v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='mean')
                     else:
                         val_ema = symlog(val_ema.view(-1)) if args.symlog else val_ema.view(-1)
                         v_loss_reg = 0.5 * ((newvalue - val_ema) ** 2).mean()
