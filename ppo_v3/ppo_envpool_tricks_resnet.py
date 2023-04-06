@@ -357,7 +357,7 @@ if __name__ == "__main__":
     envs = make_env(args.env_id, args.seed, args.num_envs)()
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs).to(device)
+    agent = Agent(envs, args).to(device)
     count_parameters(agent)
     if args.compile:
         agent = torch.compile(agent)
