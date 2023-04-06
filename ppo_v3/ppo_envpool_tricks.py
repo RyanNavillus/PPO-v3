@@ -390,6 +390,7 @@ if __name__ == "__main__":
                 high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
                 returns = (ret - low_ema) / max(1., S.item())
+                values = (values - low_ema) / max(1., S.item())
                 advantages = returns - values
                 # rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
 
