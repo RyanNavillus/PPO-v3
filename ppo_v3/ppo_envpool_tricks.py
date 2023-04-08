@@ -85,8 +85,8 @@ def parse_args():
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
-    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.85)
+    parser.add_argument("--critic-ema-coef", type=float, default=0.2)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
     args = parser.parse_args()
@@ -377,8 +377,8 @@ if __name__ == "__main__":
             rewards = symlog(rewards)
             values = symlog(values)
 
-        # calculate lambda returns like in Dreamer-V3
         if args.percentile_scale:
+            # calculate lambda returns like in Dreamer-V3
             with torch.no_grad():
                 ret = torch.zeros_like(rewards)
                 ret[-1] = values[-1]
@@ -391,7 +391,9 @@ if __name__ == "__main__":
                 low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
                 high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
-                rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
+                scaled_returns = (ret - low_ema) / max(1., S.item())
+                scaled_values = (values - low_ema) / max(1., S.item())
+                scaled_advantages = scaled_returns - scaled_values
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -415,7 +417,7 @@ if __name__ == "__main__":
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = advantages.reshape(-1)
+        b_advantages = scaled_advantages.reshape(-1) if args.percentile_scale else advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
         if args.two_hot:
@@ -464,9 +466,14 @@ if __name__ == "__main__":
 
                 # Critic EMA
                 if args.critic_ema:
-                    _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
-                    # regularize output distributiont to match that of the EMA critic
-                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
+                    with torch.no_grad():
+                        _, _, _, val_ema, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
+                    # regularize output distribution to match that of the EMA critic
+                    if args.two_hot:
+                        v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='mean')
+                    else:
+                        val_ema = symlog(val_ema.view(-1)) if args.symlog else val_ema.view(-1)
+                        v_loss_reg = 0.5 * ((newvalue - val_ema) ** 2).mean()
                     v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
 
                 # Value clipping
