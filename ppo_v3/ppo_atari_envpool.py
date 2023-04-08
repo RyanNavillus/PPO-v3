@@ -14,6 +14,8 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
+from human_normalized_scores import calculate_hns
+
 
 def parse_args():
     # fmt: off
@@ -265,8 +267,11 @@ if __name__ == "__main__":
             done = truncated | terminated
             for idx, d in enumerate(done):
                 if d:
+                    hns, rns = calculate_hns(args.env_id, info["r"][idx])
                     print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
                     writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
+                    writer.add_scalar("charts/human_normalized_score", hns, global_step)
+                    writer.add_scalar("charts/record_normalized_score", rns, global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
         # bootstrap value if not done
