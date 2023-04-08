@@ -389,35 +389,33 @@ if __name__ == "__main__":
                 low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
                 high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
-                returns = (ret - low_ema) / max(1., S.item())
-                #values = (values - low_ema) / max(1., S.item())
-                advantages = returns - values
-                # rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
+                scaled_returns = (ret - low_ema) / max(1., S.item())
+                scaled_values = (values - low_ema) / max(1., S.item())
+                scaled_advantages = scaled_returns - scaled_values
 
-        else:
-            # bootstrap value if not done
-            with torch.no_grad():
-                next_value = agent.get_value(next_obs).reshape(1, -1)
-                if args.symlog:
-                    next_value = symlog(next_value)
-                advantages = torch.zeros_like(rewards).to(device)
-                lastgaelam = 0
-                for t in reversed(range(args.num_steps)):
-                    if t == args.num_steps - 1:
-                        nextnonterminal = 1.0 - next_done
-                        nextvalues = next_value
-                    else:
-                        nextnonterminal = 1.0 - dones[t + 1]
-                        nextvalues = values[t + 1]
-                    delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                returns = advantages + values
+        # bootstrap value if not done
+        with torch.no_grad():
+            next_value = agent.get_value(next_obs).reshape(1, -1)
+            if args.symlog:
+                next_value = symlog(next_value)
+            advantages = torch.zeros_like(rewards).to(device)
+            lastgaelam = 0
+            for t in reversed(range(args.num_steps)):
+                if t == args.num_steps - 1:
+                    nextnonterminal = 1.0 - next_done
+                    nextvalues = next_value
+                else:
+                    nextnonterminal = 1.0 - dones[t + 1]
+                    nextvalues = values[t + 1]
+                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+            returns = advantages + values
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = advantages.reshape(-1)
+        b_advantages = scaled_advantages.reshape(-1) if args.percentile_scale else advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
         if args.two_hot:
