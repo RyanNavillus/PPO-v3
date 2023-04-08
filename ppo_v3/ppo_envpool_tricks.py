@@ -85,8 +85,8 @@ def parse_args():
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
-    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.85)
+    parser.add_argument("--critic-ema-coef", type=float, default=0.2)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
     args = parser.parse_args()
@@ -462,9 +462,14 @@ if __name__ == "__main__":
 
                 # Critic EMA
                 if args.critic_ema:
-                    _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
-                    # regularize output distributiont to match that of the EMA critic
-                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
+                    with torch.no_grad():
+                        _, _, _, val_ema, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
+                    # regularize output distribution to match that of the EMA critic
+                    if args.two_hot:
+                        v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='mean')
+                    else:
+                        val_ema = symlog(val_ema.view(-1)) if args.symlog else val_ema.view(-1)
+                        v_loss_reg = 0.5 * ((newvalue - val_ema) ** 2).mean()
                     v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
 
                 # Value clipping
