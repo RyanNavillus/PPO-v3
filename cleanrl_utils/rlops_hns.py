@@ -16,6 +16,7 @@ import wandb.apis.reports as wb  # noqa
 from expt import Hypothesis, Run
 from rich.console import Console
 from rich.pretty import pprint
+from rich.table import Table
 
 import openrlbenchmark
 import openrlbenchmark.cache
@@ -51,10 +52,19 @@ def parse_args():
         help="if toggled, a wandb report will be created")
     parser.add_argument("--xlabel", type=str, default="Step",
         help="the label of the x-axis")
-    parser.add_argument("--ylabel", type=str, default="Human-noramlized Score",
+    parser.add_argument("--ylabel", type=str, default="Episodic Return",
         help="the label of the y-axis")
     # fmt: on
     return parser.parse_args()
+
+
+def to_rich_table(df: pd.DataFrame) -> Table:
+    table = Table()
+    for column in df.columns:
+        table.add_column(column)
+    for _, row in df.iterrows():
+        table.add_row(*row.astype(str).tolist())
+    return table
 
 
 def create_hypothesis(
@@ -62,7 +72,7 @@ def create_hypothesis(
 ) -> Hypothesis:
     runs = []
     for idx, run in enumerate(wandb_runs):
-        print(run, run.url)
+        print("loading", run, run.url)
         if run.state == "running":
             print(f"Skipping running run: {run}")
             continue
@@ -118,6 +128,7 @@ class Runset:
 
 
 def compare(
+    console: Console,
     runsetss: List[List[Runset]],
     env_ids: List[str],
     ncols: int,
@@ -197,9 +208,14 @@ def compare(
     axes_time_flatten = axes_time.flatten()
 
     result_table = pd.DataFrame(index=env_ids, columns=[runsets[0].name for runsets in runsetss])
+    hns_result_table = pd.DataFrame(index=env_ids, columns=[runsets[0].name for runsets in runsetss])
+    min_num_seeds_per_hypothesis = {}
+    for runsets in runsetss:
+        min_num_seeds_per_hypothesis[runsets[0].name] = float("inf")
     exs = []
     runtimes = []
     for idx, env_id in enumerate(env_ids):
+        print(f"collecting runs for {env_id}")
         ex = expt.Experiment("Comparison")
         for runsets in runsetss:
             h = create_hypothesis(runsets[idx].name, runsets[idx].runs, scan_history, runsets[idx].metric)
@@ -209,12 +225,17 @@ def compare(
         # for each run `i` get the average of the last `rolling` episodes as r_i
         # then take the average and std of r_i as the results.
         result = []
+        hns_result = []
         for hypothesis in ex.hypotheses:
             metric_result = []
+            hns_metric_result = []
+            console.print(f"{hypothesis.name} has {len(hypothesis.runs)} runs", style="bold")
+            min_num_seeds_per_hypothesis[hypothesis.name] = min(min_num_seeds_per_hypothesis[hypothesis.name], len(hypothesis.runs))
             for run in hypothesis.runs:
                 # calculate hns
-                run.df["charts/episodic_return"] = (run.df["charts/episodic_return"] - atari_hns[env_id][0]) / (atari_hns[env_id][1] - atari_hns[env_id][0])
+                run.df["hns"] = (run.df["charts/episodic_return"] - atari_hns[env_id][0]) / (atari_hns[env_id][1] - atari_hns[env_id][0])
                 metric_result += [run.df["charts/episodic_return"].dropna()[-metric_last_n_average_window:].mean()]
+                hns_metric_result += [run.df["hns"].dropna()[-metric_last_n_average_window:].mean()]
 
                 # convert time unit in place
                 if time_unit == "m":
@@ -222,9 +243,11 @@ def compare(
                 elif time_unit == "h":
                     run.df["_runtime"] /= 3600
             metric_result = np.array(metric_result)
+            hns_metric_result = np.array(hns_metric_result)
             result += [f"{metric_result.mean():.2f} ± {metric_result.std():.2f}"] # , {np.mean(runtimes):.2f} ± {np.std(runtimes):.2f}
+            hns_result += [f"{hns_metric_result.mean():.2f} ± {hns_metric_result.std():.2f}"]
         result_table.loc[env_id] = result
-        # print(env_id, ex.summary())
+        hns_result_table.loc[env_id] = hns_result
         runtimes.append(list(ex.summary()["_runtime"]))
         ax = axes_flatten[idx]
         ex.plot(
@@ -234,13 +257,28 @@ def compare(
             y="charts/episodic_return",
             err_style="band",
             std_alpha=0.1,
+            n_samples=10000,
             rolling=rolling,
             colors=[runsets[idx].color for runsets in runsetss],
-            # n_samples=500,
             legend=False,
         )
-        ax.set_xlabel(args.xlabel)
-        ax.set_ylabel(args.ylabel)
+        ax2 = ax.twinx()
+        ax2.set_ylim([0, ex.summary()["hns"][0]])
+        # only set ax's y label for the first column
+        if idx % ncols == 0:
+            ax.set_ylabel(args.ylabel)
+        else:
+            ax.set_ylabel("")
+        # only set ax2's y label for the last column
+        if idx % ncols == ncols - 1:
+            ax2.set_ylabel("Human Normalized Score")
+        else:
+            ax2.set_ylabel("")
+        # only set ax' x label for the last row
+        if idx >= (nrows - 1) * ncols:
+            ax.set_xlabel(args.xlabel)
+        else:
+            ax.set_xlabel("")
         ax_time = axes_time_flatten[idx]
         ex.plot(
             ax=ax_time,
@@ -249,22 +287,42 @@ def compare(
             y="charts/episodic_return",
             err_style="band",
             std_alpha=0.1,
+            n_samples=10000,
             rolling=rolling,
             colors=[runsets[idx].color for runsets in runsetss],
-            # n_samples=500,
             legend=False,
         )
-        ax_time.set_ylabel(args.ylabel)
-        ax_time.set_xlabel(f"Time ({time_unit})")
+        ax_time2 = ax_time.twinx()
+        ax_time2.set_ylim([0, ex.summary()["hns"][0]])
+
+        # only set ax's y label for the first column
+        if idx % ncols == 0:
+            ax_time.set_ylabel(args.ylabel)
+        else:
+            ax_time.set_ylabel("")
+        # only set ax2's y label for the last column
+        if idx % ncols == ncols - 1:
+            ax_time2.set_ylabel("Human Normalized Score")
+        else:
+            ax_time2.set_ylabel("")
+        # only set ax' x label for the last row
+        if idx >= (nrows - 1) * ncols:
+            ax_time.set_xlabel(f"Time ({time_unit})")
+        else:
+            ax_time.set_xlabel("")
+
     runtimes = pd.DataFrame(np.array(runtimes), index=env_ids, columns=list(ex.summary()["name"]))
-    print("runtimes", runtimes)
-    
+    console.rule(f"[bold red]Runtime ({time_unit}) (mean ± std)")
+    console.print(to_rich_table(runtimes.rename_axis("Environment").reset_index()))
+
     # for each run set, for each seed, plot 57 curves and get their median curves, then plot the average of the median curves
     hns_ex = expt.Experiment("Human Normalized Score")
     for runsets_idx, runsets in enumerate(runsetss):
         # for each seed
         median_curves = []
-        for seed_idx, _ in enumerate(exs[0][runsets_idx]):
+        for seed_idx, _ in enumerate(range(min_num_seeds_per_hypothesis[runsets[0].name])): # exs[0][runsets_idx]
+            print(f"collecting runs for {runsets[0].name} seed {seed_idx}")
+
             runs_of_one_seed = []
             for ex_idx, ex in enumerate(exs):
                 runs_of_one_seed.append(ex[runsets_idx][seed_idx])
@@ -273,9 +331,10 @@ def compare(
                 ax=temp_axe,
                 title="Human Normalized Score",
                 x="global_step",
-                y="charts/episodic_return",
+                y="hns",
                 err_style="band",
                 rolling=rolling,
+                n_samples=10000,
                 representative_fn=lambda h: cast(pd.DataFrame, h.grouped.median()), # median curve
                 legend=False,
             )
@@ -305,8 +364,9 @@ def compare(
         ax=axes_median_hns[0],
         x="global_step",
         y="charts/episodic_return",
-        err_style="band",
+        err_style="unit_traces",
         std_alpha=0.1,
+        n_samples=10000,
         rolling=rolling,
         colors=[runsets[0].color for runsets in runsetss],
         legend=False,
@@ -316,33 +376,43 @@ def compare(
         for run_idx in range(len(hypo.runs)):
             hypo.runs[run_idx].df["_runtime"] = np.linspace(0, runtimes.mean(axis=0).iloc[hypo_idx], len(hypo.runs[run_idx].df))
 
-    axes_median_hns[0].set_ylabel(args.ylabel)
+    axes_median_hns[0].set_ylabel("Median Human Normalized Score")
     axes_median_hns[0].set_xlabel(f"Steps")
     hns_ex_time.plot(
         title=" ",
         ax=axes_median_hns[1],
         x="_runtime",
         y="charts/episodic_return",
-        err_style="band",
+        err_style="unit_traces",
         std_alpha=0.1,
+        n_samples=10000,
         rolling=rolling,
         colors=[runsets[0].color for runsets in runsetss],
         legend=False,
     )
     h, l = axes_median_hns[0].get_legend_handles_labels()
     fig_median_hns.legend(h, l, loc="lower center", ncol=ncols_legend, bbox_to_anchor=(0.5, 0.9), bbox_transform=fig_median_hns.transFigure)
-    fig_median_hns.savefig(f"{output_filename}_median_hns.png", bbox_inches="tight")
-    fig_median_hns.savefig(f"{output_filename}_median_hns.pdf", bbox_inches="tight")
+    fig_median_hns.savefig(f"{output_filename}_hns_median.png", bbox_inches="tight")
+    fig_median_hns.savefig(f"{output_filename}_hns_median.pdf", bbox_inches="tight")
 
 
     # with open(f"{output_filename}_median_hns.pkl", 'wb') as f:
     #     pickle.dump([line.get_xydata() for line in ax_median_hns.lines], f)
-    print("result_table", result_table)
+    console.rule(f"[bold red]{args.ylabel} (mean ± std)")
+    console.print(to_rich_table(result_table.rename_axis("Environment").reset_index()))
     result_table.to_markdown(open(f"{output_filename}.md", "w"))
     result_table.to_csv(open(f"{output_filename}.csv", "w"))
+
+    console.rule(f"[bold red]Human-noramlized Score (mean ± std)")
+    console.print(to_rich_table(hns_result_table.rename_axis("Environment").reset_index()))
+    hns_result_table.to_markdown(open(f"{output_filename}_hns.md", "w"))
+    hns_result_table.to_csv(open(f"{output_filename}_hns.csv", "w"))
     runtimes.to_markdown(open(f"{output_filename}_runtimes.md", "w"))
     runtimes.to_csv(open(f"{output_filename}_runtimes.csv", "w"))
-    print("runtimes", runtimes.mean(axis=0))
+    console.rule(f"[bold red]Runtime ({time_unit}) Average")
+    average_runtime = pd.DataFrame(runtimes.mean(axis=0)).reset_index()
+    average_runtime.columns = ["Environment", "Average Runtime"]
+    console.print(to_rich_table(average_runtime))
 
     # add legend
     h, l = axes_flatten[0].get_legend_handles_labels()
@@ -358,7 +428,7 @@ def compare(
     for ax in axes_time_flatten[len(env_ids) :]:
         ax.remove()
 
-    print(f"saving figure to {output_filename}")
+    print(f"saving figures and tables to {output_filename}")
     if os.path.dirname(output_filename) != "":
         os.makedirs(os.path.dirname(output_filename), exist_ok=True)
     fig.savefig(f"{output_filename}.png", bbox_inches="tight")
@@ -372,7 +442,6 @@ def compare(
 
 if __name__ == "__main__":
     args = parse_args()
-    # raise
     console = Console()
     blocks = []
     runsetss = []
@@ -418,17 +487,21 @@ if __name__ == "__main__":
             runsets = []
             for env_id in args.env_ids:
                 # HACK
-                if "alepy" in exp_name: # alepy experiments: `Breakout-v5` -> `ALE/Breakout-v5`
+                if "alepy" in exp_name:  # alepy experiments: `Breakout-v5` -> `ALE/Breakout-v5`
                     env_id = f"ALE/{env_id}"
                 elif "envpool" not in exp_name:
-                    env_id = env_id.replace("-v4", "-v2") # mujoco experiments: `HalfCheetah-v4` -> `HalfCheetah-v2`
-                    env_id = env_id.replace("-v5", "NoFrameskip-v4") # old atari experiments: `Breakout-v5` -> `BreakoutNoFrameskip-v4`
+                    env_id = env_id.replace("-v4", "-v2")  # mujoco experiments: `HalfCheetah-v4` -> `HalfCheetah-v2`
+                    env_id = env_id.replace(
+                        "-v5", "NoFrameskip-v4"
+                    )  # old atari experiments: `Breakout-v5` -> `BreakoutNoFrameskip-v4`
                 if exp_name == "ppo_continuous_action" and "rlops-pilot" in query["tag"]:
                     env_id = env_id.replace("-v4", "-v2")
 
                 runsets.append(
                     Runset(
-                        name=f"{wandb_entity}/{wandb_project_name}/{exp_name} ({query})" if custom_legend == "" else custom_legend,
+                        name=f"{wandb_entity}/{wandb_project_name}/{exp_name} ({query})"
+                        if custom_legend == ""
+                        else custom_legend,
                         filters={
                             "$and": [
                                 {f"config.{custom_env_id_key}.value": env_id},
@@ -453,6 +526,7 @@ if __name__ == "__main__":
             runsetss.append(runsets)
 
     blocks = compare(
+        console,
         runsetss,
         args.env_ids,
         output_filename=args.output_filename,
