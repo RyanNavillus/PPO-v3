@@ -17,8 +17,6 @@ from torch.distributions.normal import Normal
 
 from torch.utils.tensorboard import SummaryWriter
 
-from dmc2gym import DMCWrapper
-from dmc2gym2 import DMSuiteEnv
 from flatten import FlattenObservation
 
 def parse_args():
