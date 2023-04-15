@@ -4,7 +4,6 @@ import random
 import time
 import uuid
 from distutils.util import strtobool
-from copy import deepcopy
 
 import envpool
 import gym
@@ -12,12 +11,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
-
 from torch.utils.tensorboard import SummaryWriter
 
-from flatten import FlattenObservation
 
 def parse_args():
     # fmt: off
@@ -42,13 +38,13 @@ def parse_args():
     # Algorithm specific arguments
     parser.add_argument("--env-id", type=str, default="AcrobotSwingup-v1",
         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=10000000,
+    parser.add_argument("--total-timesteps", type=int, default=500000,
         help="total timesteps of the experiments")
-    parser.add_argument("--learning-rate", type=float, default=3e-4,
+    parser.add_argument("--learning-rate", type=float, default=2.5e-4,
         help="the learning rate of the optimizer")
-    parser.add_argument("--num-envs", type=int, default=1,
+    parser.add_argument("--num-envs", type=int, default=8,
         help="the number of parallel game environments")
-    parser.add_argument("--num-steps", type=int, default=2048,
+    parser.add_argument("--num-steps", type=int, default=128,
         help="the number of steps to run in each environment per policy rollout")
     parser.add_argument("--anneal-lr", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Toggle learning rate annealing for policy and value networks")
@@ -56,17 +52,17 @@ def parse_args():
         help="the discount factor gamma")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
         help="the lambda for the general advantage estimation")
-    parser.add_argument("--num-minibatches", type=int, default=32,
+    parser.add_argument("--num-minibatches", type=int, default=4,
         help="the number of mini-batches")
-    parser.add_argument("--update-epochs", type=int, default=10,
+    parser.add_argument("--update-epochs", type=int, default=4,
         help="the K epochs to update the policy")
     parser.add_argument("--norm-adv", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Toggles advantages normalization")
-    parser.add_argument("--clip-coef", type=float, default=0.2,
+    parser.add_argument("--clip-coef", type=float, default=0.1,
         help="the surrogate clipping coefficient")
     parser.add_argument("--clip-vloss", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="Toggles whether or not to use a clipped loss for the value function, as per the paper.")
-    parser.add_argument("--ent-coef", type=float, default=0.0,
+    parser.add_argument("--ent-coef", type=float, default=0.01,
         help="coefficient of the entropy")
     parser.add_argument("--vf-coef", type=float, default=0.5,
         help="coefficient of the value function")
@@ -105,8 +101,7 @@ def make_env(env_id, seed, num_envs):
             num_envs=num_envs,
             seed=seed,
         )
-        #envs = DMSuiteEnv(envs)
-        envs = FlattenObservation(envs, num_envs=args.num_envs)
+        envs = FlattenObservation(envs)
         envs.num_envs = num_envs
         envs.single_action_space = envs.action_space
         envs.single_observation_space = envs.observation_space
@@ -188,6 +183,17 @@ class RecordEpisodeStatistics(gym.Wrapper):
             dones,
             infos,
         )
+
+
+class FlattenObservation(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space = gym.spaces.flatten_space(env.observation_space)
+
+    def observation(self, observation):
+        # here the reshape ensures items like `'dist_to_target' --> array([0., 0., 0., 0., 0., 0., 0., 0.])`
+        # will have shapes like `(8, 1)` instead of `(8,)`
+        return np.concatenate([v.reshape(self.num_envs, -1) for v in observation.values()], 1)
 
 
 def layer_init(layer, zero=False, std=np.sqrt(2), bias_const=0.0):
@@ -281,6 +287,7 @@ if __name__ == "__main__":
 
     # env setup
     envs = make_env(args.env_id, args.seed, args.num_envs)()
+    assert isinstance(envs.action_space, gym.spaces.Box), "only discrete action space is supported"
 
     agent = Agent(envs, args).to(device)
     if args.compile:
@@ -339,16 +346,15 @@ if __name__ == "__main__":
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, next_done, info = envs.step(action.cpu().numpy())
+            next_obs, reward, cpu_next_done, info = envs.step(action.cpu().numpy())
             rewards[step] = torch.tensor(reward).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(cpu_next_done).to(device)
 
-            # truncated = (
-            #     info["elapsed_step"] >= envs.spec.config.max_episode_steps
-            # )  # https://github.com/sail-sg/envpool/issues/239
-            # terminated = info["terminated"]
-            # done = truncated | terminated
-            done = dones[step]
+            truncated = (
+                info["elapsed_step"] >= envs.spec.config.max_episode_steps
+            )  # https://github.com/sail-sg/envpool/issues/239
+            terminated = cpu_next_done
+            done = truncated | terminated
             for idx, d in enumerate(done):
                 if d:
                     print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
