@@ -141,6 +141,8 @@ class Tuner:
         study.optimize(
             objective,
             n_trials=num_trials,
+            n_jobs=2,
+            show_progress_bar=True,
         )
         print(f"The best trial obtains a normalized score of {study.best_trial.value}", study.best_trial.params)
         return study.best_trial
