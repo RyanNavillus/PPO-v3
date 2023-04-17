@@ -14,7 +14,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from human_normalized_scores import calculate_hns
+from ppo_v3.human_normalized_scores import calculate_hns
 
 
 def parse_args():
@@ -183,6 +183,8 @@ class Agent(nn.Module):
 
 
 if __name__ == "__main__":
+    import sys
+    print(sys.argv)
     args = parse_args()
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
     if args.track:

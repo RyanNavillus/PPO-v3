@@ -21,6 +21,7 @@ moviepy = "^1.0.3"
 openrlbenchmark = "^0.1.1b1"
 pre-commit = "^3.0.4"
 torch = ">=1.12.1"
+optuna = "^3.1.1"
 
 
 [build-system]

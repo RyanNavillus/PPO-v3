@@ -15,7 +15,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from human_normalized_scores import calculate_hns
+from ppo_v3.human_normalized_scores import calculate_hns
 
 
 def parse_args():
