@@ -464,7 +464,8 @@ if __name__ == "__main__":
 
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(mb_returns, agent.B)
+                    with torch.no_grad():
+                        twohot_target = calc_twohot(mb_returns, agent.B)
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
