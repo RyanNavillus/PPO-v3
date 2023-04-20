@@ -298,7 +298,6 @@ if __name__ == "__main__":
     if args.critic_ema:
         critic_ema = Agent(envs, args).to(device)
         critic_ema.network = agent.network
-        critic_ema.actor = agent.actor
         # TODO: Test if this is correct
         critic_ema.critic.load_state_dict(agent.critic.state_dict())
 
