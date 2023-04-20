@@ -82,8 +82,8 @@ def parse_args():
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema-rate", type=float, default=0.85)
-    parser.add_argument("--critic-ema-coef", type=float, default=0.2)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
+    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
     args = parser.parse_args()

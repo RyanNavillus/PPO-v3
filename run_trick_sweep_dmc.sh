@@ -7,75 +7,76 @@ gittag=$(git describe --tags)
 
 for (( startseed=1; startseed<=$seeds; startseed++ ))
 do
-
-    # poetry run python -m cleanrl_utils.benchmark \
-    #     --env-ids $env_id \
-    #     --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_none --total-timesteps $timesteps --track" \
-    #     --start-seed $startseed \
-    #     --num-seeds 1 \
-    #     --workers $workers
-
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_all --symlog True --two-hot True --percentile-scale True --critic-ema True --unimix 0.01 --critic-zero-init True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_all --num-envs 128  --symlog True --two-hot True --percentile-scale True --critic-ema True --unimix 0.01 --critic-zero-init True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 
     poetry run python -m cleanrl_utils.benchmark \
        --env-ids $env_id \
-       --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_symlog --symlog True --total-timesteps $timesteps --track" \
+       --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_symlog --num-envs 128  --symlog True --total-timesteps $timesteps --track" \
        	--start-seed $startseed \
        	--num-seeds 1 \
        	--workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_twohot --two-hot True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_twohot --num-envs 128  --two-hot True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_percentile --percentile-scale True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_percentile --num-envs 128  --percentile-scale True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_criticema --critic-ema True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_criticema --num-envs 128  --critic-ema True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_unimix --unimix 0.01 --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_unimix --num-envs 128  --unimix 0.01 --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_zeroinit --critic-zero-init True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_zeroinit --num-envs 128  --critic-zero-init True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers \
-	--slurm-gpus-per-task 1 \
-	--slurm-template-path ppov3.slurm_template
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
+
+    poetry run python -m cleanrl_utils.benchmark \
+        --env-ids $env_id \
+        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_none --num-envs 128 --total-timesteps $timesteps --track" \
+        --start-seed $startseed \
+        --num-seeds 1 \
+        --workers $workers \
+        --slurm-gpus-per-task 1 \
+        --slurm-template-path ppov3.slurm_template
 done
 
