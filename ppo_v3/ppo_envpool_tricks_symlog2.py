@@ -391,6 +391,11 @@ if __name__ == "__main__":
                 scaled_values = (values - low_ema) / max(1., S.item())
                 scaled_advantages = scaled_returns - scaled_values
 
+        if args.symlog:
+            #rewards = symlog(rewards)
+            #values = symlog(values)
+            pass
+
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
