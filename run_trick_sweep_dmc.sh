@@ -17,49 +17,49 @@ do
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_all_but_symlog --two-hot True --percentile-scale True --critic-ema --unimix 0.01 --critic-zero-init True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_all --symlog True --two-hot True --percentile-scale True --critic-ema True --unimix 0.01 --critic-zero-init True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers
 
     poetry run python -m cleanrl_utils.benchmark \
        --env-ids $env_id \
-       --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_symlog --symlog True --total-timesteps $timesteps --track" \
+       --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_symlog --symlog True --total-timesteps $timesteps --track" \
        --start-seed $startseed \
        --num-seeds 1 \
        --workers $workers
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_twohot --two-hot True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_twohot --two-hot True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_percentile --percentile-scale True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_percentile --percentile-scale True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_twohot_criticema --two-hot True --critic-ema True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_criticema --critic-ema True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_unimix --unimix 0.01 --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_unimix --unimix 0.01 --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers
 
     poetry run python -m cleanrl_utils.benchmark \
         --env-ids $env_id \
-        --command "poetry run python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_zeroinit --critic-zero-init True --total-timesteps $timesteps --track" \
+        --command "singularity exec --nv /fs/nexus-scratch/rsulli/ppov3.simg python ppo_v3/ppo_envpool_tricks_dmc.py --exp-name ppo_envpool_tricks_dmc_zeroinit --critic-zero-init True --total-timesteps $timesteps --track" \
         --start-seed $startseed \
         --num-seeds 1 \
         --workers $workers
