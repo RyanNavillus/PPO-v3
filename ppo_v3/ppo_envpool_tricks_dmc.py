@@ -361,10 +361,6 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
-        if args.symlog:
-            rewards = symlog(rewards)
-            values = symlog(values)
-
         if args.percentile_scale:
             # calculate lambda returns like in Dreamer-V3
             with torch.no_grad():
@@ -400,6 +396,10 @@ if __name__ == "__main__":
                 delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
+
+        if args.symlog:
+            returns = symlog(returns)
+            values = symlog(values)
 
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
@@ -447,7 +447,8 @@ if __name__ == "__main__":
 
                 # Value loss
                 if args.two_hot:
-                    twohot_target = calc_twohot(mb_returns, agent.B)
+                    with torch.no_grad():
+                        twohot_target = calc_twohot(mb_returns, agent.B)
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
