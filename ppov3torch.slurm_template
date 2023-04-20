@@ -20,4 +20,13 @@ seed=${seeds[$SLURM_ARRAY_TASK_ID % {{len_seeds}}]}
 
 echo "Running task $SLURM_ARRAY_TASK_ID with env_id: $env_id and seed: $seed"
 
-srun {{command}} --env-id $env_id --seed $seed
+nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
+nodes_array=($nodes)
+head_node=${nodes_array[0]}
+head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+echo Node IP: $head_node_ip
+export LOGLEVEL=INFO
+echo nodes_array: $nodes_array
+
+srun poetry run torchrun --nnodes {{ntasks}} --nproc_per_node 1 --rdzv_id $RANDOM --rdzv_backend c10d --rdzv_endpoint $head_node_ip:29500 {{command}} --env-id $env_id --seed $seed
+
