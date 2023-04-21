@@ -240,7 +240,6 @@ class Agent(nn.Module):
             val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
         else:
             val = self.critic(net_out)
-            val = symexp(val) if args.symlog else val
             logits_critic = None
         val = symexp(val) if args.symlog else val
         return val, logits_critic
@@ -391,6 +390,11 @@ if __name__ == "__main__":
                 scaled_returns = (ret - low_ema) / max(1., S.item())
                 scaled_values = (values - low_ema) / max(1., S.item())
                 scaled_advantages = scaled_returns - scaled_values
+
+        if args.symlog:
+            #rewards = symlog(rewards)
+            #values = symlog(values)
+            pass
 
         # bootstrap value if not done
         with torch.no_grad():

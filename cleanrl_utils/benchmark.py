@@ -82,8 +82,8 @@ if __name__ == "__main__":
                 os.environ["WANDB_TAGS"] = wandb_tag
 
     commands = []
-    for seed in range(0, args.num_seeds):
-        for env_id in args.env_ids:
+    for env_id in args.env_ids:
+        for seed in range(0, args.num_seeds):
             commands += [" ".join([args.command, "--env-id", env_id, "--seed", str(args.start_seed + seed)])]
 
     print("======= commands to run:")
