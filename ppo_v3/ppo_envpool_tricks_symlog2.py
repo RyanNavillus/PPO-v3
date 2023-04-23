@@ -15,7 +15,7 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-from ppo_v3.human_normalized_scores import calculate_hns
+from human_normalized_scores import calculate_hns
 
 
 def parse_args():
@@ -85,8 +85,8 @@ def parse_args():
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
-    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.85)
+    parser.add_argument("--critic-ema-coef", type=float, default=0.2)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
     args = parser.parse_args()
@@ -294,8 +294,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    print(device)
-    
+
     # env setup
     envs = make_env(args.env_id, args.seed, args.num_envs)()
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
@@ -391,6 +390,11 @@ if __name__ == "__main__":
                 scaled_returns = (ret - low_ema) / max(1., S.item())
                 scaled_values = (values - low_ema) / max(1., S.item())
                 scaled_advantages = scaled_returns - scaled_values
+
+        if args.symlog:
+            #rewards = symlog(rewards)
+            #values = symlog(values)
+            pass
 
         # bootstrap value if not done
         with torch.no_grad():
