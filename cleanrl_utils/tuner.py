@@ -127,13 +127,22 @@ class Tuner:
                 self.aggregation_fn(normalized_scoress, axis=1)
             )  # we alaways return the average of the aggregated normalized scores
 
-        study = optuna.create_study(
-            study_name=self.study_name,
-            direction=self.direction,
-            storage=self.storage,
-            pruner=self.pruner,
-            sampler=self.sampler,
-        )
+        try:
+            study = optuna.load_study(
+                study_name=self.study_name,
+                storage=self.storage,
+                pruner=self.pruner,
+                sampler=self.sampler,
+            )
+        except KeyError:
+            print("Load study failed: Creating new study")
+            study = optuna.create_study(
+                study_name=self.study_name,
+                direction=self.direction,
+                storage=self.storage,
+                pruner=self.pruner,
+                sampler=self.sampler,
+            )
         print("==========================================================================================")
         print("run another tuner with the following command:")
         print(f"python -m cleanrl_utils.tuner --study-name {self.study_name}")
