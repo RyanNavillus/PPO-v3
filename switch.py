@@ -10,7 +10,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         env_idx = next(i for i, string in enumerate(sys.argv) if "--env-id" in string)
         env_id = sys.argv[env_idx].split("=")[1]
-        sys.argv += ["--cuda", "False"]
 
         if env_id in atari_envs:
             experiment = runpy.run_path(path_name="ppo_v3/ppo_envpool_tricks.py", run_name="__main__")

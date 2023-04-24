@@ -36,6 +36,7 @@ class Tuner:
         storage: str = "sqlite:///cleanrl_hpopt.db",
         study_name: str = "",
         wandb_kwargs: Dict[str, any] = {},
+        device: str = "cuda"
     ) -> None:
         self.script = script
         self.metric = metric
@@ -67,6 +68,7 @@ class Tuner:
         if len(self.study_name) == 0:
             self.study_name = f"tuner_{int(time.time())}"
         self.wandb_kwargs = wandb_kwargs
+        self.device = device
 
     def tune(self, num_trials: int, num_seeds: int) -> None:
         def objective(trial: optuna.Trial):
@@ -87,7 +89,7 @@ class Tuner:
             for seed in range(num_seeds):
                 normalized_scores = []
                 for env_id in self.target_scores.keys():
-                    sys.argv = algo_command + [f"--env-id={env_id}", f"--seed={seed}", "--track=False"]
+                    sys.argv = algo_command + [f"--env-id={env_id}", f"--seed={seed}", "--track=False", f"--device={self.device}"]
                     with HiddenPrints():
                         experiment = runpy.run_path(path_name=self.script, run_name="__main__")
 
