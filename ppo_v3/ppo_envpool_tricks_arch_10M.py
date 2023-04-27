@@ -75,7 +75,7 @@ def parse_args():
         help="the target KL divergence threshold")
     parser.add_argument("--channels", type=int, default=64,
         help="the hidden size of the MLP")
-    parser.add_argument("--hidden", type=int, default=68,
+    parser.add_argument("--hidden", type=int, default=768,
         help="the hidden size of the MLP")
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
@@ -92,7 +92,20 @@ def parse_args():
     parser.add_argument("--critic-ema-coef", type=float, default=1.0)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
-    args = parser.parse_args()4096
+    args = parser.parse_args()
+    args.batch_size = int(args.num_envs * args.num_steps)
+    args.minibatch_size = int(args.batch_size // args.num_minibatches)
+    # fmt: on
+    return args
+
+
+ATARI_MAX_FRAMES = int(
+    108000 / 4
+)  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
+
+
+def make_env(env_id, seed, num_envs):
+    def thunk():
         envs = envpool.make(
             env_id,
             env_type="gym",
