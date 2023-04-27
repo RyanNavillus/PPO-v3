@@ -73,9 +73,9 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    parser.add_argument("--channels", type=int, default=64,
+    parser.add_argument("--channels", type=int, default=256,
         help="the hidden size of the MLP")
-    parser.add_argument("--hidden", type=int, default=768,
+    parser.add_argument("--hidden", type=int, default=2048,
         help="the hidden size of the MLP")
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
