@@ -116,8 +116,8 @@ def make_env(env_id, seed, num_envs):
             full_action_space=True,                 # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,     # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
             reward_clip=not args.symlog,            # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
-            img_height args.channels,                          # Hafner et al., 2023 (Dreamer v3) codebase
-            img_width args.channels,                           # Hafner et al., 2023 (Dreamer v3) codebase
+            img_height=64,                          # Hafner et al., 2023 (Dreamer v3) codebase
+            img_width=64,                           # Hafner et al., 2023 (Dreamer v3) codebase
             gray_scale=False,                       # Hafner et al., 2023 (Dreamer v3) codebase
             stack_num=1,                            # Hafner et al., 2023 (Dreamer v3) codebase
             seed=seed,

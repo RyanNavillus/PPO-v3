@@ -209,7 +209,7 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
     envs = make_env(args.env_id, args.seed, args.num_envs)()

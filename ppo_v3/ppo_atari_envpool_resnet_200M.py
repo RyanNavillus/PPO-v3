@@ -13,6 +13,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+from datetime import timedelta
+
 
 
 def parse_args():
@@ -26,6 +28,8 @@ def parse_args():
         help="if toggled, `torch.backends.cudnn.deterministic=False`")
     parser.add_argument("--cuda", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="if toggled, cuda will be enabled by default")
+    parser.add_argument("--device", type=str, default="cuda:0",
+        help="Cuda device to use if cuda is enabled.")
     parser.add_argument("--track", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="if toggled, this experiment will be tracked with Weights and Biases")
     parser.add_argument("--wandb-project-name", type=str, default="ppo-v3",
@@ -70,13 +74,13 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-    parser.add_argument("--channels", type=int, nargs="+", default=[512, 1024, 1024, 512], # type is actually List[int]
+    parser.add_argument("--channels", type=int, nargs="+", default=[512, 512, 512, 512], # type is actually List[int]
         help="the channels of the CNN")
-    parser.add_argument("--hidden", type=int, default=4096,
+    parser.add_argument("--hidden", type=int, default=2048,
         help="the hidden size of the MLP")
     parser.add_argument("--num-blocks", type=int, default=2,
         help="the number of residual blocks")
-    
+
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
     args = parser.parse_args()
@@ -264,7 +268,8 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    program_start = time.time()
+    device = torch.device(args.device if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
     envs = make_env(args.env_id, args.seed, args.num_envs)()
@@ -292,6 +297,10 @@ if __name__ == "__main__":
     num_updates = args.total_timesteps // args.batch_size
 
     for update in range(1, num_updates + 1):
+        epoch_lengths = []
+        epoch_returns = []
+        epoch_time = time.time()
+        epoch_step = 0
         update_time_start = time.time()
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -300,19 +309,26 @@ if __name__ == "__main__":
             optimizer.param_groups[0]["lr"] = lrnow
 
         for step in range(0, args.num_steps):
+            env_step_time = 0
+            inference_time = 0
             global_step += 1 * args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
+                start = time.time()
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
+                inference_time += time.time() - start
+
                 values[step] = value.flatten()
             actions[step] = action
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
+            start = time.time()
             next_obs, reward, next_done, info = envs.step(action.cpu().numpy())
+            env_step_time += time.time() - start
             rewards[step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
 
@@ -352,6 +368,7 @@ if __name__ == "__main__":
         b_values = values.reshape(-1)
 
         # Optimizing the policy and value network
+        train_time = time.time()
         b_inds = np.arange(args.batch_size)
         clipfracs = []
         for epoch in range(args.update_epochs):
@@ -410,7 +427,35 @@ if __name__ == "__main__":
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
+        # TIMING: performance metrics to evaluate cpu/gpu usage
+        epoch_step += args.batch_size
+
+        train_time = time.time() - train_time
+        epoch_time = time.time() - epoch_time
+        extra_time = epoch_time - train_time - env_step_time
+
+        env_sps = int(epoch_step / env_step_time)
+        inference_sps = int(epoch_step / inference_time)
+        train_sps = int(epoch_step / train_time)
+        epoch_sps = int(epoch_step / epoch_time)
+
+        remaining = timedelta(seconds=int((args.total_timesteps - global_step) / epoch_sps))
+        uptime = timedelta(seconds=int(time.time() - program_start))
+        completion_percentage = 100 * global_step / args.total_timesteps
+
+        if len(epoch_returns) > 0:
+            epoch_return = np.mean(epoch_returns)
+            epoch_length = int(np.mean(epoch_lengths))
+        else:
+            epoch_return = 0.0
+            epoch_length = 0.0
+
         # TRY NOT TO MODIFY: record rewards for plotting purposes
+        writer.add_scalar("performance/env_time", env_step_time, global_step)
+        writer.add_scalar("performance/inference_time", inference_time, global_step)
+        writer.add_scalar("performance/train_time", train_time, global_step)
+        writer.add_scalar("performance/epoch_time", epoch_time, global_step)
+        writer.add_scalar("performance/extra_time", extra_time, global_step)
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
         writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
