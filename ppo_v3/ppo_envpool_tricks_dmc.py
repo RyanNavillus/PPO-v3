@@ -76,6 +76,7 @@ def parse_args():
 
     # Dreamer Tricks
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--symobs", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
@@ -240,10 +241,14 @@ class Agent(nn.Module):
         return val, logits_critic
 
     def get_value(self, x):
+        if args.symobs:
+            x = symlog(x)
         val, _ = self.critic_val(self.network(x))
         return val
 
     def get_action_and_value(self, x, action=None):
+        if args.symobs:
+            x = symlog(x)
         hidden = self.network(x)
         action_mean = self.actor_mean(hidden)
         action_logstd = self.actor_logstd.expand_as(action_mean)
