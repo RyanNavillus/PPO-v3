@@ -85,8 +85,8 @@ def parse_args():
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
     parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema-rate", type=float, default=0.85)
-    parser.add_argument("--critic-ema-coef", type=float, default=0.2)
+    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
+    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
     parser.add_argument("--return-lambda", type=float, default=0.95)
 
     args = parser.parse_args()
@@ -280,8 +280,9 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
+            dir="/fs/nexus-scratch/rsulli/"
         )
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(f"/fs/nexus-scratch/rsulli/runs/{run_name}")
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
