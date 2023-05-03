@@ -240,7 +240,6 @@ class Agent(nn.Module):
         return val, logits_critic
 
     def get_value(self, x):
-        x = x / 255.0
         val, _ = self.critic_val(self.network(x))
         return val
 

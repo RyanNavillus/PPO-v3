@@ -5,7 +5,7 @@
 #SBATCH --requeue
 #SBATCH --gpus-per-task={{gpus_per_task}}
 #SBATCH --cpus-per-gpu=6
-#SBATCH --time=6:0:0
+#SBATCH --time=12:0:0
 #SBATCH --ntasks={{ntasks}}
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --array={{array}}
