@@ -379,15 +379,14 @@ if __name__ == "__main__":
                 low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
                 high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
-                scaled_returns = (ret - low_ema) / max(1., S.item())
-                scaled_values = (values - low_ema) / max(1., S.item())
-                scaled_advantages = scaled_returns - scaled_values
+                writer.add_scalar("charts/5th_percentile", low_ema, global_step)
+                writer.add_scalar("charts/95th_percentile", high_ema, global_step)
+                writer.add_scalar("charts/truncated_return", torch.mean(ret).item(), global_step)
+                writer.add_scalar("charts/advantage_scale", S.item(), global_step)
 
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
-            if args.symlog:
-                next_value = symlog(next_value)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
@@ -409,7 +408,7 @@ if __name__ == "__main__":
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = scaled_advantages.reshape(-1) if args.percentile_scale else advantages.reshape(-1)
+        b_advantages = advantages.reshape(-1) / max(1., S.item()) if args.percentile_scale else advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
         if args.two_hot:
