@@ -78,6 +78,7 @@ def parse_args():
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--symobs", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--two-hot-range", type=int, default=20)
     parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
@@ -224,7 +225,7 @@ class Agent(nn.Module):
         self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(envs.single_action_space.shape)))
 
         if args.two_hot:
-            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
+            self.B = torch.nn.Parameter(torch.linspace(-args.two_hot_range, args.two_hot_range, 256))   # (256, )
             self.B.requires_grad = False
             self.critic = layer_init(nn.Linear(512, len(self.B)), zero=args.critic_zero_init, std=1)
         else:
