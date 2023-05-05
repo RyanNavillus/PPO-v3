@@ -1,21 +1,17 @@
 #!/bin/bash
-#SBATCH --partition=scavenger
+#SBATCH --partition=g40
 #SBATCH --job-name=pv3
-#SBATCH --account=scavenger
+#SBATCH --account=carperai
 #SBATCH --requeue
 #SBATCH --gpus-per-task={{gpus_per_task}}
-#SBATCH --cpus-per-gpu=6
+#SBATCH --cpus-per-gpu=10
 #SBATCH --time=6:0:0
 #SBATCH --ntasks={{ntasks}}
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --array={{array}}
-#SBATCH --exclude=legacygpu01
 {{nodes}}
 
-#export PATH=$PATH:/admin/home-costa/.local/bin
 unset LD_LIBRARY_PATH
-module load cuda/11.4.4
-nvcc --version
 
 env_ids={{env_ids}}
 seeds={{seeds}}
