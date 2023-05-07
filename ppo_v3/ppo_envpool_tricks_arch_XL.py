@@ -73,14 +73,16 @@ def parse_args():
         help="the maximum norm for the gradient clipping")
     parser.add_argument("--target-kl", type=float, default=None,
         help="the target KL divergence threshold")
-
+    parser.add_argument("--channels", type=int, default=96,
+        help="the hidden size of the MLP")
+    parser.add_argument("--hidden", type=int, default=1024,
+        help="the hidden size of the MLP")
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
 
     # Dreamer Tricks
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--two-hot-range", , type=int, default=20)
     parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
@@ -108,12 +110,16 @@ def make_env(env_id, seed, num_envs):
             env_id,
             env_type="gym",
             num_envs=num_envs,
-            episodic_life=False,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
-            repeat_action_probability=0.25,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
-            noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
-            full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
-            max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=not args.symlog,    # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            episodic_life=False,                    # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
+            repeat_action_probability=0.25,         # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
+            noop_max=1,                             # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
+            full_action_space=True,                 # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
+            max_episode_steps=ATARI_MAX_FRAMES,     # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
+            reward_clip=not args.symlog,            # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            img_height=64,                          # Hafner et al., 2023 (Dreamer v3) codebase
+            img_width=64,                           # Hafner et al., 2023 (Dreamer v3) codebase
+            gray_scale=False,                       # Hafner et al., 2023 (Dreamer v3) codebase
+            stack_num=1,                            # Hafner et al., 2023 (Dreamer v3) codebase
             seed=seed,
         )
         envs.num_envs = num_envs
@@ -211,39 +217,74 @@ def layer_init(layer, zero=False, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+def count_parameters(model):
+    """https://stackoverflow.com/questions/49201236/check-the-total-number-of-parameters-in-a-pytorch-model"""
+    table = {}
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad: continue
+        params = parameter.numel()
+        table[name] = params
+        total_params+=params
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+
+
 class Agent(nn.Module):
     def __init__(self, envs, args):
         super().__init__()
         self.args = args
+        # Hafner et al., 2023 (Dreamer v3) small (S) architecture
+        N = 8
+        M = 4
         self.network = nn.Sequential(
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
+            layer_init(nn.Conv2d(3, args.channels, 3, stride=2, padding=1)),
+            nn.LayerNorm([args.channels, 32, 32], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Conv2d(args.channels, args.channels*2, 3, stride=2, padding=1)),
+            nn.LayerNorm([args.channels*2, 16, 16], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Conv2d(args.channels*2, args.channels*4, 3, stride=2, padding=1)),
+            nn.LayerNorm([args.channels*4, 8, 8], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Conv2d(args.channels*4, args.channels*8, 3, stride=2, padding=1)),
+            nn.LayerNorm([args.channels*8, 4, 4], eps=1e-3),
+            nn.SiLU(),
             nn.Flatten(),
-            layer_init(nn.Linear(64 * 7 * 7, 512)),
-            nn.ReLU(),
+            layer_init(nn.Linear(args.channels * 8 * 4 * 4, args.hidden)),
+            nn.LayerNorm([args.hidden], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Linear(args.hidden, args.hidden)),
+            nn.LayerNorm([args.hidden], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Linear(args.hidden, args.hidden)),
+            nn.LayerNorm([args.hidden], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Linear(args.hidden, args.hidden)),
+            nn.LayerNorm([args.hidden], eps=1e-3),
+            nn.SiLU(),
+            layer_init(nn.Linear(args.hidden, args.hidden)),
+            nn.LayerNorm([args.hidden], eps=1e-3),
+            nn.SiLU(),
         )
-        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+        print(self.network)
+        self.actor = layer_init(nn.Linear(args.hidden, envs.single_action_space.n), std=0.01)
 
         if args.two_hot:
-            self.B = torch.nn.Parameter(torch.linspace(-args.two_hot_range, args.two_hot_range, 256))   # (256, )
+            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
             self.B.requires_grad = False
-            self.critic = layer_init(nn.Linear(512, len(self.B)), zero=args.critic_zero_init, std=1)
+            self.critic = layer_init(nn.Linear(args.hidden, len(self.B)), zero=args.critic_zero_init, std=1)
         else:
-            self.critic = layer_init(nn.Linear(512, 1), zero=args.critic_zero_init, std=1)
+            self.critic = layer_init(nn.Linear(args.hidden, 1), zero=args.critic_zero_init, std=1)
 
     def critic_val(self, net_out):  # (b, 256)
         if self.args.two_hot:
             logits_critic = self.critic(net_out)
             val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
+            val = symexp(val) if args.symlog else val
         else:
             val = self.critic(net_out)
-            val = symexp(val) if args.symlog else val
             logits_critic = None
-        val = symexp(val) if args.symlog else val
         return val, logits_critic
 
     def get_value(self, x):
@@ -282,9 +323,8 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
-            dir="/fsx/ryansullivan/PPO-v3/wandb"
         )
-    writer = SummaryWriter(f"/fsx/ryansullivan/PPO-v3/runs/{run_name}")
+    writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -303,6 +343,7 @@ if __name__ == "__main__":
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     agent = Agent(envs, args).to(device)
+    count_parameters(agent)
     if args.compile:
         agent = torch.compile(agent)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -376,8 +417,8 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/record_normalized_score", rns, global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
+        # calculate lambda returns like in Dreamer-V3
         if args.percentile_scale:
-            # calculate lambda returns like in Dreamer-V3
             with torch.no_grad():
                 ret = torch.zeros_like(rewards)
                 ret[-1] = values[-1]
@@ -390,10 +431,7 @@ if __name__ == "__main__":
                 low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
                 high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
                 S = high_ema - low_ema
-                writer.add_scalar("charts/5th_percentile", low_ema, global_step)
-                writer.add_scalar("charts/95th_percentile", high_ema, global_step)
-                writer.add_scalar("charts/truncated_return", torch.mean(ret).item(), global_step)
-                writer.add_scalar("charts/advantage_scale", S.item(), global_step)
+                rewards = rewards / max(1., S.item())  # scaling rewards is same as scaling returns
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -411,15 +449,11 @@ if __name__ == "__main__":
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
 
-        if args.symlog:
-            returns = symlog(returns)
-            values = symlog(values)
-
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = advantages.reshape(-1) / max(1., S.item()) if args.percentile_scale else advantages.reshape(-1)
+        b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
         if args.two_hot:
@@ -435,8 +469,6 @@ if __name__ == "__main__":
                 mb_inds = b_inds[start:end]
 
                 _, newlogprob, entropy, newvalue, newlogitscritic = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
-                if args.symlog:
-                    newvalue = symlog(newvalue)
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -455,28 +487,23 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                mb_returns = b_returns[mb_inds]
-                mb_values = b_values[mb_inds]
-                newvalue = newvalue.view(-1)
+                # Apply symlog
+                mb_returns = symlog(b_returns[mb_inds]) if args.symlog else b_returns[mb_inds]
+                mb_values = symlog(b_values[mb_inds]) if args.symlog else b_values[mb_inds]
+                newvalue = symlog(newvalue.view(-1)) if args.symlog else newvalue.view(-1)
 
                 # Value loss
                 if args.two_hot:
-                    with torch.no_grad():
-                        twohot_target = calc_twohot(mb_returns, agent.B)
+                    twohot_target = calc_twohot(mb_returns, agent.B)
                     v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
                 else:
                     v_loss_unclipped = (newvalue - mb_returns) ** 2
 
                 # Critic EMA
                 if args.critic_ema:
-                    with torch.no_grad():
-                        _, _, _, val_ema, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
-                    # regularize output distribution to match that of the EMA critic
-                    if args.two_hot:
-                        v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='mean')
-                    else:
-                        val_ema = symlog(val_ema.view(-1)) if args.symlog else val_ema.view(-1)
-                        v_loss_reg = 0.5 * ((newvalue - val_ema) ** 2).mean()
+                    _, _, _, _, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
+                    # regularize output distributiont to match that of the EMA critic
+                    v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='none')
                     v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
 
                 # Value clipping
@@ -499,7 +526,7 @@ if __name__ == "__main__":
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
-                
+
                 # Update Critic EMA weights
                 if args.critic_ema:
                     with torch.no_grad():
