@@ -101,7 +101,7 @@ def make_env(env_id, seed, num_envs):
             noop_max=1,                             # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
             full_action_space=True,                 # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,     # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=False,                      # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            reward_clip=True,                      # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             img_height=64,                          # Hafner et al., 2023 (Dreamer v3) codebase
             img_width=64,                           # Hafner et al., 2023 (Dreamer v3) codebase
             gray_scale=False,                       # Hafner et al., 2023 (Dreamer v3) codebase
@@ -163,6 +163,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 class Agent(nn.Module):
     def __init__(self, envs):
         super().__init__()
+        # 20668371 params
         self.network = nn.Sequential(
             layer_init(nn.Conv2d(3, args.channels, 3, stride=2, padding=1)),
             nn.LayerNorm([args.channels, 32, 32], eps=1e-3),
@@ -194,8 +195,8 @@ class Agent(nn.Module):
             nn.SiLU(),
         )
         self.actor = layer_init(nn.Linear(args.hidden, envs.single_action_space.n), std=0.01)
-        self.critic = layer_init(nn.Linear(args.hidden, 1), zero=args.critic_zero_init, std=1)
-
+        self.critic = layer_init(nn.Linear(args.hidden, 1), std=1)
+    
     def get_value(self, x):
         return self.critic(self.network(x / 255.0))
 
@@ -207,6 +208,17 @@ class Agent(nn.Module):
             action = probs.sample()
         return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
+def count_parameters(model):
+    """https://stackoverflow.com/questions/49201236/check-the-total-number-of-parameters-in-a-pytorch-model"""
+    table = {}
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad: continue
+        params = parameter.numel()
+        table[name] = params
+        total_params+=params
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
 
 if __name__ == "__main__":
     args = parse_args()
@@ -222,8 +234,9 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
+            dir="/fsx/ryansullivan/PPO-v3/wandb"
         )
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(f"/fsx/ryansullivan/PPO-v3/runs/{run_name}")
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -242,6 +255,7 @@ if __name__ == "__main__":
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     agent = Agent(envs).to(device)
+    count_parameters(agent)
     if args.compile:
         agent = torch.compile(agent)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)

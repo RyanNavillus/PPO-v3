@@ -120,7 +120,7 @@ def make_env(env_id, seed, num_envs):
             img_height=64,                          # Hafner et al., 2023 (Dreamer v3) codebase
             img_width=64,                           # Hafner et al., 2023 (Dreamer v3) codebase
             gray_scale=False,                       # Hafner et al., 2023 (Dreamer v3) codebase
-            stack_num=1,                            # Hafner et al., 2023 (Dreamer v3) codebase
+            stack_num=4,                            # Hafner et al., 2023 (Dreamer v3) codebase
             seed=seed,
         )
         envs.num_envs = num_envs
@@ -236,7 +236,7 @@ class Agent(nn.Module):
         super().__init__()
         self.args = args
         self.network = nn.Sequential(
-            layer_init(nn.Conv2d(3, args.channels, 3, stride=2, padding=1)),
+            layer_init(nn.Conv2d(12, args.channels, 3, stride=2, padding=1)),
             nn.LayerNorm([args.channels, 32, 32], eps=1e-3),
             nn.SiLU(),
             layer_init(nn.Conv2d(args.channels, args.channels*2, 3, stride=2, padding=1)),
