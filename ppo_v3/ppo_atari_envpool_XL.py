@@ -4,7 +4,6 @@ import random
 import time
 import uuid
 from distutils.util import strtobool
-from copy import deepcopy
 
 import envpool
 import gym
@@ -79,23 +78,9 @@ def parse_args():
         help="the hidden size of the MLP")
     parser.add_argument("--compile", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Whether to use `torch.compile` (only available in PyTorch 2.0+)")
-
-    # Dreamer Tricks
-    parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--unimix", type=float, default=0.0)
-    parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
-    parser.add_argument("--critic-zero-init", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--critic-ema-rate", type=float, default=0.98)
-    parser.add_argument("--critic-ema-coef", type=float, default=1.0)
-    parser.add_argument("--return-lambda", type=float, default=0.95)
-
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
-    #args.channels = int(args.channels / 4)      # divide by 4 to compensate for framestack
     # fmt: on
     return args
 
@@ -131,45 +116,6 @@ def make_env(env_id, seed, num_envs):
         return envs
 
     return thunk
-
-
-def symlog(x):
-    return torch.sign(x) * torch.log(1 + torch.abs(x))
-
-
-def symexp(x):
-    return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
-
-
-def calc_twohot(x, B):
-    """
-    x shape:(n_vals, ) is tensor of values
-    B shape:(n_bins, ) is tensor of bin values
-    returns a twohot tensor of shape (n_vals, n_bins)
-
-    can verify this method is correct with:
-     - calc_twohot(x, B)@B == x # expected value reconstructs x
-     - (calc_twohot(x, B)>0).sum(dim=-1) == 2 # only two bins are hot
-    """
-    twohot = torch.zeros((x.shape+B.shape), dtype=x.dtype, device=x.device)
-    k1 = (B[None, :] <= x[:, None]).sum(dim=-1)-1
-    k2 = k1+1
-    k1 = torch.clip(k1, 0, len(B) - 1)
-    k2 = torch.clip(k2, 0, len(B) - 1)
-
-    # Handle k1 == k2 case
-    equal = (k1 == k2)
-    dist_to_below = torch.where(equal, 1, torch.abs(B[k1] - x))
-    dist_to_above = torch.where(equal, 0, torch.abs(B[k2] - x))
-
-    # Assign values to two-hot tensor
-    total = dist_to_above + dist_to_below
-    weight_below = dist_to_above / total
-    weight_above = dist_to_below / total
-    x_range = np.arange(len(x))
-    twohot[x_range, k1] = weight_below   # assign left
-    twohot[x_range, k2] = weight_above   # assign right
-    return twohot
 
 
 class RecordEpisodeStatistics(gym.Wrapper):
@@ -208,33 +154,15 @@ class RecordEpisodeStatistics(gym.Wrapper):
         )
 
 
-def layer_init(layer, zero=False, std=np.sqrt(2), bias_const=0.0):
-    if zero:
-        torch.nn.init.zeros_(layer.weight)
-    else:
-        torch.nn.init.orthogonal_(layer.weight, std)
-
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
 
-def count_parameters(model):
-    """https://stackoverflow.com/questions/49201236/check-the-total-number-of-parameters-in-a-pytorch-model"""
-    table = {}
-    total_params = 0
-    for name, parameter in model.named_parameters():
-        if not parameter.requires_grad: continue
-        params = parameter.numel()
-        table[name] = params
-        total_params+=params
-    print(table)
-    print(f"Total Trainable Params: {total_params}")
-
-
 class Agent(nn.Module):
-    def __init__(self, envs, args):
+    def __init__(self, envs):
         super().__init__()
-        self.args = args
         self.network = nn.Sequential(
             layer_init(nn.Conv2d(3, args.channels, 3, stride=2, padding=1)),
             nn.LayerNorm([args.channels, 32, 32], eps=1e-3),
@@ -266,44 +194,18 @@ class Agent(nn.Module):
             nn.SiLU(),
         )
         self.actor = layer_init(nn.Linear(args.hidden, envs.single_action_space.n), std=0.01)
-
-        if args.two_hot:
-            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
-            self.B.requires_grad = False
-            self.critic = layer_init(nn.Linear(args.hidden, len(self.B)), zero=args.critic_zero_init, std=1)
-        else:
-            self.critic = layer_init(nn.Linear(args.hidden, 1), zero=args.critic_zero_init, std=1)
-
-    def critic_val(self, net_out):  # (b, 256)
-        if self.args.two_hot:
-            logits_critic = self.critic(net_out)
-            val = logits_critic.softmax(dim=-1) @ self.B[:, None]   # (b, 256) @ (256, 1) = (b, 1)
-        else:
-            val = self.critic(net_out)
-            logits_critic = None
-        val = symexp(val) if args.symlog else val
-        return val, logits_critic
+        self.critic = layer_init(nn.Linear(args.hidden, 1), zero=args.critic_zero_init, std=1)
 
     def get_value(self, x):
-        x = x / 255.0
-        val, _ = self.critic_val(self.network(x))
-        return val
+        return self.critic(self.network(x / 255.0))
 
     def get_action_and_value(self, x, action=None):
-        x = x / 255.0
-        hidden = self.network(x)
+        hidden = self.network(x / 255.0)
         logits = self.actor(hidden)
-        dist = Categorical(logits=logits)
-
-        # Unimix
-        uniform = torch.ones_like(dist.probs) / dist.probs.shape[-1]
-        probs = (1. - self.args.unimix) * dist.probs + self.args.unimix * uniform
-        dist = Categorical(probs=probs)
-
+        probs = Categorical(logits=logits)
         if action is None:
-            action = dist.sample()
-        val, logits_critic = self.critic_val(hidden)
-        return action, dist.log_prob(action), dist.entropy(), val, logits_critic
+            action = probs.sample()
+        return action, probs.log_prob(action), probs.entropy(), self.critic(hidden)
 
 
 if __name__ == "__main__":
@@ -339,19 +241,10 @@ if __name__ == "__main__":
     envs = make_env(args.env_id, args.seed, args.num_envs)()
     assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    agent = Agent(envs, args).to(device)
-    count_parameters(agent)
+    agent = Agent(envs).to(device)
     if args.compile:
         agent = torch.compile(agent)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-
-    # Create EMA of critic parameters
-    if args.critic_ema:
-        critic_ema = Agent(envs, args).to(device)
-        critic_ema.network = agent.network
-        critic_ema.actor = agent.actor
-        # TODO: Test if this is correct
-        critic_ema.critic.load_state_dict(agent.critic.state_dict())
 
     # ALGO Logic: Storage setup
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -360,11 +253,6 @@ if __name__ == "__main__":
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    if args.two_hot:
-        logits_critics = torch.zeros((args.num_steps, args.num_envs, len(agent.B))).to(device)
-    if args.percentile_scale:
-        low_ema = torch.zeros(()).to(device)
-        high_ema = torch.zeros(()).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -388,10 +276,8 @@ if __name__ == "__main__":
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value, logits_critic = agent.get_action_and_value(next_obs)
+                action, logprob, _, value = agent.get_action_and_value(next_obs)
                 values[step] = value.flatten()
-                if args.two_hot:
-                    logits_critics[step] = logits_critic
             actions[step] = action
             logprobs[step] = logprob
 
@@ -414,29 +300,9 @@ if __name__ == "__main__":
                     writer.add_scalar("charts/record_normalized_score", rns, global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
-        if args.percentile_scale:
-            # calculate lambda returns like in Dreamer-V3
-            with torch.no_grad():
-                ret = torch.zeros_like(rewards)
-                ret[-1] = values[-1]
-                for t in reversed(range(len(rewards))[:-1]):
-                    lam = args.return_lambda
-                    ret[t] = (rewards[t] + args.gamma * (~(dones[t+1] > 0)) *
-                              ((1-lam) * values[t+1] + lam * ret[t+1]))
-                low, high = ret.quantile(0.05), ret.quantile(0.95)
-                decay = args.percentile_ema_rate
-                low_ema = low if low_ema is None else decay * low_ema + (1 - decay) * low
-                high_ema = high if high_ema is None else decay * high_ema + (1 - decay) * high
-                S = high_ema - low_ema
-                scaled_returns = (ret - low_ema) / max(1., S.item())
-                scaled_values = (values - low_ema) / max(1., S.item())
-                scaled_advantages = scaled_returns - scaled_values
-
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
-            if args.symlog:
-                next_value = symlog(next_value)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
@@ -450,19 +316,13 @@ if __name__ == "__main__":
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
             returns = advantages + values
 
-        if args.symlog:
-            returns = symlog(returns)
-            values = symlog(values)
-
         # flatten the batch
         b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
         b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = scaled_advantages.reshape(-1) if args.percentile_scale else advantages.reshape(-1)
+        b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
-        if args.two_hot:
-            b_logits_critics = logits_critics.reshape(-1, len(agent.B))
 
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
@@ -473,9 +333,7 @@ if __name__ == "__main__":
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                _, newlogprob, entropy, newvalue, newlogitscritic = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
-                if args.symlog:
-                    newvalue = symlog(newvalue)
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
 
@@ -494,42 +352,20 @@ if __name__ == "__main__":
                 pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-                mb_returns = b_returns[mb_inds]
-                mb_values = b_values[mb_inds]
-                newvalue = newvalue.view(-1)
-
                 # Value loss
-                if args.two_hot:
-                    with torch.no_grad():
-                        twohot_target = calc_twohot(mb_returns, agent.B)
-                    v_loss_unclipped = nn.functional.cross_entropy(newlogitscritic, twohot_target, reduction='mean')
-                else:
-                    v_loss_unclipped = (newvalue - mb_returns) ** 2
-
-                # Critic EMA
-                if args.critic_ema:
-                    with torch.no_grad():
-                        _, _, _, val_ema, logits_ema = critic_ema.get_action_and_value(b_obs[mb_inds])
-                    # regularize output distribution to match that of the EMA critic
-                    if args.two_hot:
-                        v_loss_reg = nn.functional.cross_entropy(newlogitscritic, logits_ema.softmax(dim=-1), reduction='mean')
-                    else:
-                        val_ema = symlog(val_ema.view(-1)) if args.symlog else val_ema.view(-1)
-                        v_loss_reg = 0.5 * ((newvalue - val_ema) ** 2).mean()
-                    v_loss_unclipped = v_loss_unclipped + args.critic_ema_coef * v_loss_reg.mean()
-
-                # Value clipping
+                newvalue = newvalue.view(-1)
                 if args.clip_vloss:
-                    v_clipped = mb_values + torch.clamp(
-                        newvalue - mb_values,
+                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
+                    v_clipped = b_values[mb_inds] + torch.clamp(
+                        newvalue - b_values[mb_inds],
                         -args.clip_coef,
                         args.clip_coef,
                     )
-                    v_loss_clipped = (v_clipped - mb_returns) ** 2
+                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
                     v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
                     v_loss = 0.5 * v_loss_max.mean()
                 else:
-                    v_loss = v_loss_unclipped if args.two_hot else 0.5 * v_loss_unclipped.mean()
+                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
@@ -538,13 +374,7 @@ if __name__ == "__main__":
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
-                
-                # Update Critic EMA weights
-                if args.critic_ema:
-                    with torch.no_grad():
-                        decay = args.critic_ema_rate
-                        for fast, slow in zip(agent.critic.parameters(), critic_ema.critic.parameters()):
-                            slow.copy_(decay * slow + (1 - decay) * fast)
+
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     break
