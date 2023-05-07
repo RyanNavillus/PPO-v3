@@ -4,7 +4,6 @@ import random
 import time
 import uuid
 from distutils.util import strtobool
-from copy import deepcopy
 
 import envpool
 import gym
@@ -12,10 +11,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions.categorical import Categorical
+from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
-
-from human_normalized_scores import calculate_hns
 
 
 def parse_args():
@@ -27,8 +24,8 @@ def parse_args():
         help="seed of the experiment")
     parser.add_argument("--torch-deterministic", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
         help="if toggled, `torch.backends.cudnn.deterministic=False`")
-    parser.add_argument("--device", type=str, default="cuda",
-        help="the device to run experiments on")
+    parser.add_argument("--cuda", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+        help="if toggled, cuda will be enabled by default")
     parser.add_argument("--track", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="if toggled, this experiment will be tracked with Weights and Biases")
     parser.add_argument("--wandb-project-name", type=str, default="ppo-v3",
@@ -39,9 +36,9 @@ def parse_args():
         help="whether to capture videos of the agent performances (check out `videos` folder)")
 
     # Algorithm specific arguments
-    parser.add_argument("--env-id", type=str, default="Pong-v5",
+    parser.add_argument("--env-id", type=str, default="AcrobotSwingup-v1",
         help="the id of the environment")
-    parser.add_argument("--total-timesteps", type=int, default=10000000,
+    parser.add_argument("--total-timesteps", type=int, default=500000,
         help="total timesteps of the experiments")
     parser.add_argument("--learning-rate", type=float, default=2.5e-4,
         help="the learning rate of the optimizer")
@@ -79,8 +76,8 @@ def parse_args():
 
     # Dreamer Tricks
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
+    parser.add_argument("--symobs", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--two-hot-range", , type=int, default=20)
     parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
@@ -97,25 +94,15 @@ def parse_args():
     return args
 
 
-ATARI_MAX_FRAMES = int(
-    108000 / 4
-)  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
-
-
 def make_env(env_id, seed, num_envs):
     def thunk():
         envs = envpool.make(
             env_id,
             env_type="gym",
             num_envs=num_envs,
-            episodic_life=False,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
-            repeat_action_probability=0.25,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
-            noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
-            full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
-            max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=not args.symlog,    # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             seed=seed,
         )
+        envs = FlattenObservation(envs)
         envs.num_envs = num_envs
         envs.single_action_space = envs.action_space
         envs.single_observation_space = envs.observation_space
@@ -183,14 +170,12 @@ class RecordEpisodeStatistics(gym.Wrapper):
 
     def step(self, action):
         observations, rewards, dones, infos = super().step(action)
-        truncated = infos["elapsed_step"] >= envs.spec.config.max_episode_steps
-        terminated = infos["terminated"]
-        self.episode_returns += infos["reward"]
+        self.episode_returns += rewards
         self.episode_lengths += 1
         self.returned_episode_returns[:] = self.episode_returns
         self.returned_episode_lengths[:] = self.episode_lengths
-        self.episode_returns *= (1 - terminated) * (1 - truncated)
-        self.episode_lengths *= (1 - terminated) * (1 - truncated)
+        self.episode_returns *= (1 - dones)
+        self.episode_lengths *= (1 - dones)
         infos["r"] = self.returned_episode_returns
         infos["l"] = self.returned_episode_lengths
         return (
@@ -199,6 +184,17 @@ class RecordEpisodeStatistics(gym.Wrapper):
             dones,
             infos,
         )
+
+
+class FlattenObservation(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space = gym.spaces.flatten_space(env.observation_space)
+
+    def observation(self, observation):
+        # here the reshape ensures items like `'dist_to_target' --> array([0., 0., 0., 0., 0., 0., 0., 0.])`
+        # will have shapes like `(8, 1)` instead of `(8,)`
+        return np.concatenate([v.reshape(self.num_envs, -1) for v in observation.values()], 1)
 
 
 def layer_init(layer, zero=False, std=np.sqrt(2), bias_const=0.0):
@@ -215,21 +211,20 @@ class Agent(nn.Module):
     def __init__(self, envs, args):
         super().__init__()
         self.args = args
+
         self.network = nn.Sequential(
-            layer_init(nn.Conv2d(4, 32, 8, stride=4)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-            nn.ReLU(),
-            nn.Flatten(),
-            layer_init(nn.Linear(64 * 7 * 7, 512)),
-            nn.ReLU(),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 512)),
+            nn.Tanh(),
+            layer_init(nn.Linear(512, 512)),
+            nn.Tanh(),
         )
-        self.actor = layer_init(nn.Linear(512, envs.single_action_space.n), std=0.01)
+        self.actor_mean = nn.Sequential(
+            layer_init(nn.Linear(512, np.prod(envs.single_action_space.shape)), std=0.01),
+        )
+        self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(envs.single_action_space.shape)))
 
         if args.two_hot:
-            self.B = torch.nn.Parameter(torch.linspace(-args.two_hot_range, args.two_hot_range, 256))   # (256, )
+            self.B = torch.nn.Parameter(torch.linspace(-20, 20, 256))   # (256, )
             self.B.requires_grad = False
             self.critic = layer_init(nn.Linear(512, len(self.B)), zero=args.critic_zero_init, std=1)
         else:
@@ -246,25 +241,23 @@ class Agent(nn.Module):
         return val, logits_critic
 
     def get_value(self, x):
-        x = x / 255.0
+        if args.symobs:
+            x = symlog(x)
         val, _ = self.critic_val(self.network(x))
         return val
 
     def get_action_and_value(self, x, action=None):
-        x = x / 255.0
+        if args.symobs:
+            x = symlog(x)
         hidden = self.network(x)
-        logits = self.actor(hidden)
-        dist = Categorical(logits=logits)
-
-        # Unimix
-        uniform = torch.ones_like(dist.probs) / dist.probs.shape[-1]
-        probs = (1. - self.args.unimix) * dist.probs + self.args.unimix * uniform
-        dist = Categorical(probs=probs)
-
+        action_mean = self.actor_mean(hidden)
+        action_logstd = self.actor_logstd.expand_as(action_mean)
+        action_std = torch.exp(action_logstd)
+        probs = Normal(action_mean, action_std)
         if action is None:
-            action = dist.sample()
+            action = probs.sample()
         val, logits_critic = self.critic_val(hidden)
-        return action, dist.log_prob(action), dist.entropy(), val, logits_critic
+        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), val, logits_critic
 
 
 if __name__ == "__main__":
@@ -281,9 +274,8 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
-            dir="/fsx/ryansullivan/PPO-v3/wandb"
         )
-    writer = SummaryWriter(f"/fsx/ryansullivan/PPO-v3/runs/{run_name}")
+    writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -295,11 +287,11 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
     envs = make_env(args.env_id, args.seed, args.num_envs)()
-    assert isinstance(envs.action_space, gym.spaces.Discrete), "only discrete action space is supported"
+    assert isinstance(envs.action_space, gym.spaces.Box), "only discrete action space is supported"
 
     agent = Agent(envs, args).to(device)
     if args.compile:
@@ -310,7 +302,6 @@ if __name__ == "__main__":
     if args.critic_ema:
         critic_ema = Agent(envs, args).to(device)
         critic_ema.network = agent.network
-        critic_ema.actor = agent.actor
         # TODO: Test if this is correct
         critic_ema.critic.load_state_dict(agent.critic.state_dict())
 
@@ -353,26 +344,24 @@ if __name__ == "__main__":
                 values[step] = value.flatten()
                 if args.two_hot:
                     logits_critics[step] = logits_critic
+
             actions[step] = action
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, next_done, info = envs.step(action.cpu().numpy())
+            next_obs, reward, cpu_next_done, info = envs.step(action.cpu().numpy())
             rewards[step] = torch.tensor(reward).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
+            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(cpu_next_done).to(device)
 
             truncated = (
                 info["elapsed_step"] >= envs.spec.config.max_episode_steps
             )  # https://github.com/sail-sg/envpool/issues/239
-            terminated = info["terminated"]
+            terminated = cpu_next_done
             done = truncated | terminated
             for idx, d in enumerate(done):
                 if d:
-                    hns, rns = calculate_hns(args.env_id, info["r"][idx])
                     print(f"global_step={global_step}, episodic_return={info['r'][idx]}")
                     writer.add_scalar("charts/episodic_return", info["r"][idx], global_step)
-                    writer.add_scalar("charts/human_normalized_score", hns, global_step)
-                    writer.add_scalar("charts/record_normalized_score", rns, global_step)
                     writer.add_scalar("charts/episodic_length", info["l"][idx], global_step)
 
         if args.percentile_scale:
@@ -423,6 +412,8 @@ if __name__ == "__main__":
         b_values = values.reshape(-1)
         if args.two_hot:
             b_logits_critics = logits_critics.reshape(-1, len(agent.B))
+        
+        writer.add_scalar("charts/mean_abs_advantages", torch.mean(torch.abs(b_advantages)), global_step)
 
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
