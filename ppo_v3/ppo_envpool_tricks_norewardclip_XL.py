@@ -95,7 +95,7 @@ def parse_args():
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
-    args.channels /= 4      # divide by 4 to compensate for framestack
+    #args.channels = int(args.channels / 4)      # divide by 4 to compensate for framestack
     # fmt: on
     return args
 
@@ -116,7 +116,7 @@ def make_env(env_id, seed, num_envs):
             noop_max=1,                             # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
             full_action_space=True,                 # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
             max_episode_steps=ATARI_MAX_FRAMES,     # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=False                       # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
+            reward_clip=False,                      # Hafner et al., 2023 (Dreamer v3) p.4 "With symlog predictions, there is no need for truncating large rewards"
             img_height=64,                          # Hafner et al., 2023 (Dreamer v3) codebase
             img_width=64,                           # Hafner et al., 2023 (Dreamer v3) codebase
             gray_scale=False,                       # Hafner et al., 2023 (Dreamer v3) codebase
