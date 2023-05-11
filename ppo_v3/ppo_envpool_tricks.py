@@ -80,7 +80,7 @@ def parse_args():
     # Dreamer Tricks
     parser.add_argument("--symlog", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--two-hot", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
-    parser.add_argument("--two-hot-range", , type=int, default=20)
+    parser.add_argument("--two-hot-range", type=int, default=20)
     parser.add_argument("--unimix", type=float, default=0.0)
     parser.add_argument("--percentile-scale", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True)
     parser.add_argument("--percentile-ema-rate", type=float, default=0.99)
@@ -131,6 +131,7 @@ def symlog(x):
 
 
 def symexp(x):
+    x = torch.clip(x, -20, 20)  # Clipped to prevent extremely rare occurence where critic throws a huge value
     return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
 
 
@@ -281,7 +282,7 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
-            dir="/fsx/ryansullivan/PPO-v3/wandb"
+            dir="/fsx/ryansullivan/PPO-v3/wandb/"
         )
     writer = SummaryWriter(f"/fsx/ryansullivan/PPO-v3/runs/{run_name}")
     writer.add_text(
